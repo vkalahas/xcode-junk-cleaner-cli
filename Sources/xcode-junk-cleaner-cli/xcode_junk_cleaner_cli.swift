@@ -667,7 +667,6 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
             }
         }
         
-        print("DEBUG: targetCategories count = \(targetCategories.count), names = \(targetCategories.map { $0.id })")
         
         if targetCategories.isEmpty {
             if json {
@@ -688,44 +687,137 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         var spinnerTask: Task<Void, Never>? = nil
         if isSpinnerEnabled {
             spinnerTask = Task {
-                let n = targetCategories.count
+                let totalCategoriesCount = targetCategories.count
+                var nextToPrintIndex = 0
+                var lastActiveLinesCount = 0
+                
                 while !Task.isCancelled {
                     stateManager.incrementAnimation()
                     let snapshot = stateManager.getSnapshot()
                     
-                    var lines: [String] = []
-                    for state in snapshot {
-                        let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
-                        let bar: String
-                        let statusText: String
+                    // 1. Gather newly completed lines
+                    var completedLinesToPrint: [String] = []
+                    var tempIdx = nextToPrintIndex
+                    while tempIdx < totalCategoriesCount {
+                        let state = snapshot[tempIdx]
                         if let size = state.size {
-                            bar = ("[" + String(repeating: "█", count: 20) + "]").colored(.green)
+                            let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
+                            let bar = ("[" + String(repeating: "█", count: 20) + "]").colored(.green)
                             let sizeStr = (state.category == .unavailableSimulators || state.category == .previewSimulators) ? "\(size) devices" : JunkCategory.formatBytes(size)
-                            if size > 0 {
-                                statusText = sizeStr.colored(.boldYellow)
-                            } else {
-                                statusText = "0 B (Clean)".colored(.green)
-                            }
+                            let statusText = size > 0 ? sizeStr.colored(.boldYellow) : "0 B (Clean)".colored(.green)
+                            completedLinesToPrint.append("   Analyzing \(categoryName)... \(bar) \(statusText)")
+                            tempIdx += 1
                         } else {
-                            bar = animatedProgressBar(step: state.animationStep).colored(.cyan)
-                            statusText = "Analyzing...".colored(.white)
+                            break
                         }
-                        lines.append("\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)")
                     }
                     
-                    var output = lines.joined(separator: "\n")
-                    if n > 1 {
-                        output += "\u{001B}[\(n-1)A\r"
+                    // 2. Gather active lines
+                    var activeStates: [ScanStateManager.CategoryState] = []
+                    for i in tempIdx..<totalCategoriesCount {
+                        let state = snapshot[i]
+                        if state.size == nil {
+                            activeStates.append(state)
+                        }
+                    }
+                    
+                    var activeLines: [String] = []
+                    let maxActiveToShow = 4
+                    if activeStates.count <= maxActiveToShow {
+                        for state in activeStates {
+                            let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
+                            let bar = animatedProgressBar(step: state.animationStep).colored(.cyan)
+                            let statusText = "Analyzing...".colored(.white)
+                            activeLines.append("   Analyzing \(categoryName)... \(bar) \(statusText)")
+                        }
                     } else {
-                        output += "\r"
+                        for i in 0..<3 {
+                            let state = activeStates[i]
+                            let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
+                            let bar = animatedProgressBar(step: state.animationStep).colored(.cyan)
+                            let statusText = "Analyzing...".colored(.white)
+                            activeLines.append("   Analyzing \(categoryName)... \(bar) \(statusText)")
+                        }
+                        let remainingCount = activeStates.count - 3
+                        activeLines.append("   ... and \(remainingCount) more categories scanning in parallel ...".colored(.cyan))
                     }
                     
-                    print(output, terminator: "")
+                    // 3. Render
+                    let L = lastActiveLinesCount
+                    let C = completedLinesToPrint.count
+                    let A = activeLines.count
+                    
+                    if L > 0 {
+                        print("\u{001B}[\(L)A\r", terminator: "")
+                    }
+                    
+                    for line in completedLinesToPrint {
+                        print("\u{001B}[K\(line)")
+                    }
+                    
+                    for line in activeLines {
+                        print("\u{001B}[K\(line)")
+                    }
+                    
+                    if C + A < L {
+                        let leftover = L - (C + A)
+                        for _ in 0..<leftover {
+                            print("\u{001B}[K")
+                        }
+                        print("\u{001B}[\(leftover)A\r", terminator: "")
+                    }
+                    
+                    if A > 0 {
+                        print("\u{001B}[\(A)A\r", terminator: "")
+                    }
+                    
                     fflush(stdout)
+                    
+                    nextToPrintIndex = tempIdx
+                    lastActiveLinesCount = A
                     stateManager.setHasPrinted()
                     
                     try? await Task.sleep(nanoseconds: 80_000_000)
                 }
+                
+                // Final update after loop cancel (all tasks resolved)
+                let snapshot = stateManager.getSnapshot()
+                var completedLinesToPrint: [String] = []
+                var tempIdx = nextToPrintIndex
+                while tempIdx < totalCategoriesCount {
+                    let state = snapshot[tempIdx]
+                    if let size = state.size {
+                        let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
+                        let bar = ("[" + String(repeating: "█", count: 20) + "]").colored(.green)
+                        let sizeStr = (state.category == .unavailableSimulators || state.category == .previewSimulators) ? "\(size) devices" : JunkCategory.formatBytes(size)
+                        let statusText = size > 0 ? sizeStr.colored(.boldYellow) : "0 B (Clean)".colored(.green)
+                        completedLinesToPrint.append("   Analyzing \(categoryName)... \(bar) \(statusText)")
+                        tempIdx += 1
+                    } else {
+                        break
+                    }
+                }
+                
+                let L = lastActiveLinesCount
+                let C = completedLinesToPrint.count
+                
+                if L > 0 {
+                    print("\u{001B}[\(L)A\r", terminator: "")
+                }
+                
+                for line in completedLinesToPrint {
+                    print("\u{001B}[K\(line)")
+                }
+                
+                if C < L {
+                    let leftover = L - C
+                    for _ in 0..<leftover {
+                        print("\u{001B}[K")
+                    }
+                    print("\u{001B}[\(leftover)A\r", terminator: "")
+                }
+                
+                fflush(stdout)
             }
         }
         
@@ -749,29 +841,6 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         if let spinnerTask = spinnerTask {
             spinnerTask.cancel()
             _ = await spinnerTask.result
-            
-            let snapshot = stateManager.getSnapshot()
-            var output = ""
-            for state in snapshot {
-                let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
-                let bar: String
-                let statusText: String
-                if let size = state.size {
-                    bar = ("[" + String(repeating: "█", count: 20) + "]").colored(.green)
-                    let sizeStr = (state.category == .unavailableSimulators || state.category == .previewSimulators) ? "\(size) devices" : JunkCategory.formatBytes(size)
-                    if size > 0 {
-                        statusText = sizeStr.colored(.boldYellow)
-                    } else {
-                        statusText = "0 B (Clean)".colored(.green)
-                    }
-                } else {
-                    bar = ("[" + String(repeating: "█", count: 20) + "]").colored(.green)
-                    statusText = "0 B (Clean)".colored(.green)
-                }
-                output += "\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)\n"
-            }
-            print(output, terminator: "")
-            fflush(stdout)
         }
         
         scannedCategories = resultsWithIndices.map { ($0.1, $0.2) }

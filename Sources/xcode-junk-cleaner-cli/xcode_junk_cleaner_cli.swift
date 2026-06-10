@@ -172,6 +172,21 @@ struct XcodeJunkCleaner: ParsableCommand {
         }
     }
     
+    private func runLaunchctl(arguments: [String]) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        } catch {
+            return -1
+        }
+    }
+
     private func installScheduler(interval: String) throws {
         #if !os(macOS)
         writeToStderr("[ERROR] LaunchAgent scheduling is only supported on macOS.")
@@ -258,34 +273,15 @@ struct XcodeJunkCleaner: ParsableCommand {
         }
         
         let uid = getuid()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["bootstrap", "gui/\(uid)", plistURL.path]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        let plistPath = plistURL.path
         
-        let unloadProcess = Process()
-        unloadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        unloadProcess.arguments = ["bootout", "gui/\(uid)", plistURL.path]
-        unloadProcess.standardOutput = Pipe()
-        unloadProcess.standardError = Pipe()
-        try? unloadProcess.run()
-        unloadProcess.waitUntilExit()
+        // Unload first just in case
+        _ = runLaunchctl(arguments: ["bootout", "gui/\(uid)", plistPath])
         
-        do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus != 0 {
-                let loadProcess = Process()
-                loadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-                loadProcess.arguments = ["load", plistURL.path]
-                loadProcess.standardOutput = Pipe()
-                loadProcess.standardError = Pipe()
-                try loadProcess.run()
-                loadProcess.waitUntilExit()
-            }
-        } catch {
-            // Ignore error
+        let status = runLaunchctl(arguments: ["bootstrap", "gui/\(uid)", plistPath])
+        if status != 0 {
+            // Fallback to load
+            _ = runLaunchctl(arguments: ["load", plistPath])
         }
         
         print("[SUCCESS] Scheduled background cleaning task successfully (\(interval)).")
@@ -306,26 +302,11 @@ struct XcodeJunkCleaner: ParsableCommand {
         let plistURL = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
         
         let uid = getuid()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["bootout", "gui/\(uid)", plistURL.path]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        let plistPath = plistURL.path
         
-        do {
-            try process.run()
-            process.waitUntilExit()
-            if process.terminationStatus != 0 {
-                let unloadProcess = Process()
-                unloadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-                unloadProcess.arguments = ["unload", plistURL.path]
-                unloadProcess.standardOutput = Pipe()
-                unloadProcess.standardError = Pipe()
-                try unloadProcess.run()
-                unloadProcess.waitUntilExit()
-            }
-        } catch {
-            // Ignore error
+        let status = runLaunchctl(arguments: ["bootout", "gui/\(uid)", plistPath])
+        if status != 0 {
+            _ = runLaunchctl(arguments: ["unload", plistPath])
         }
         
         if fm.fileExists(atPath: plistURL.path) {
@@ -533,39 +514,16 @@ struct XcodeJunkCleaner: ParsableCommand {
     
     // MARK: - Private Clean Routines
     
-    private func cleanAll(categories: [(category: JunkCategory, size: Int64)]) throws {
-        log("\nCleaning all junk folders...")
+    private func runBulkCleanup(categories: [(category: JunkCategory, size: Int64)], cleanAllCategories: Bool) throws {
+        let modeName = cleanAllCategories ? "all junk folders" : "all 100% safe (Group A) junk folders"
+        log("\nCleaning \(modeName)...")
+        
         var totalReclaimed: Int64 = 0
         var details: [DeletionDetail] = []
         
         for (category, size) in categories where size > 0 {
-            let (reclaimed, errorMsg) = deleteCategoryWithResult(category, size: size)
-            totalReclaimed += reclaimed
-            details.append(DeletionDetail(
-                id: category.id,
-                displayName: category.displayName,
-                reclaimedBytes: reclaimed,
-                status: reclaimed > 0 ? "success" : "failed",
-                error: errorMsg
-            ))
-        }
-        
-        if json {
-            outputJson(DeletionResult(totalReclaimedBytes: totalReclaimed, deletedCategories: details))
-        } else {
-            log("=========================================================".colored(.cyan))
-            log("Done! Reclaimed a total of ".colored(.boldGreen) + JunkCategory.formatBytes(totalReclaimed).colored(.boldGreen))
-            log("")
-        }
-    }
-    
-    private func cleanSafe(categories: [(category: JunkCategory, size: Int64)]) throws {
-        log("\nCleaning all 100% safe (Group A) junk folders...")
-        var totalReclaimed: Int64 = 0
-        var details: [DeletionDetail] = []
-        
-        for (category, size) in categories where size > 0 {
-            if category.isSafe {
+            let shouldClean = cleanAllCategories || category.isSafe
+            if shouldClean {
                 let (reclaimed, errorMsg) = deleteCategoryWithResult(category, size: size)
                 totalReclaimed += reclaimed
                 details.append(DeletionDetail(
@@ -593,6 +551,14 @@ struct XcodeJunkCleaner: ParsableCommand {
             log("Done! Reclaimed a total of ".colored(.boldGreen) + JunkCategory.formatBytes(totalReclaimed).colored(.boldGreen))
             log("")
         }
+    }
+    
+    private func cleanAll(categories: [(category: JunkCategory, size: Int64)]) throws {
+        try runBulkCleanup(categories: categories, cleanAllCategories: true)
+    }
+    
+    private func cleanSafe(categories: [(category: JunkCategory, size: Int64)]) throws {
+        try runBulkCleanup(categories: categories, cleanAllCategories: false)
     }
     
     private func runInteractive(categories: [(category: JunkCategory, size: Int64)]) throws {

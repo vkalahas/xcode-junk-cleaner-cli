@@ -209,6 +209,36 @@ public enum JunkCategory: String, CaseIterable {
     }
     
     /// Calculates directory size recursively in bytes.
+    private func getURLSize(url: URL, fm: FileManager) -> Int64 {
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
+        
+        if !isDir.boolValue {
+            let attrs = try? fm.attributesOfItem(atPath: url.path)
+            return (attrs?[.size] as? Int64) ?? 0
+        }
+        
+        let properties: [URLResourceKey] = [.fileSizeKey, .isDirectoryKey]
+        guard let enumerator = fm.enumerator(
+            at: url,
+            includingPropertiesForKeys: properties,
+            options: [.skipsHiddenFiles],
+            errorHandler: nil
+        ) else {
+            return 0
+        }
+        
+        var totalSize: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            if let values = try? fileURL.resourceValues(forKeys: Set(properties)),
+               let isDirectory = values.isDirectory, !isDirectory,
+               let fileSize = values.fileSize {
+                totalSize += Int64(fileSize)
+            }
+        }
+        return totalSize
+    }
+
     public func calculateSize(home: URL = FileManager.default.homeDirectoryForCurrentUser, olderThanDays: Int? = nil, exclusions: [String] = []) -> Int64 {
         if self == .unavailableSimulators {
             return Int64(countUnavailableSimulators())
@@ -217,37 +247,9 @@ public enum JunkCategory: String, CaseIterable {
         let fm = FileManager.default
         let urls = getChildren(home: home, olderThanDays: olderThanDays, exclusions: exclusions)
         var totalSize: Int64 = 0
-        let properties: [URLResourceKey] = [.fileSizeKey, .isDirectoryKey]
         
         for url in urls {
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
-            
-            if !isDir.boolValue {
-                if let attrs = try? fm.attributesOfItem(atPath: url.path),
-                   let size = attrs[.size] as? Int64 {
-                    totalSize += size
-                }
-                continue
-            }
-            
-            // Recursive scan
-            guard let enumerator = fm.enumerator(
-                at: url,
-                includingPropertiesForKeys: properties,
-                options: [.skipsHiddenFiles],
-                errorHandler: nil
-            ) else {
-                continue
-            }
-            
-            for case let fileURL as URL in enumerator {
-                if let values = try? fileURL.resourceValues(forKeys: Set(properties)),
-                   let isDirectory = values.isDirectory, !isDirectory,
-                   let fileSize = values.fileSize {
-                    totalSize += Int64(fileSize)
-                }
-            }
+            totalSize += getURLSize(url: url, fm: fm)
         }
         
         return totalSize
@@ -256,28 +258,27 @@ public enum JunkCategory: String, CaseIterable {
     /// Deletes the folder and its contents recursively.
     public func delete(home: URL = FileManager.default.homeDirectoryForCurrentUser, olderThanDays: Int? = nil, exclusions: [String] = []) throws {
         let fm = FileManager.default
+        
         switch self {
         case .unavailableSimulators:
             try deleteUnavailableSimulators()
-        case .simulatorDevices:
-            if olderThanDays == nil && exclusions.isEmpty {
+            return
+        default:
+            break
+        }
+        
+        if olderThanDays == nil && exclusions.isEmpty {
+            if self == .simulatorDevices {
                 try eraseAllSimulators()
             } else {
-                let urls = getChildren(home: home, olderThanDays: olderThanDays, exclusions: exclusions)
-                for url in urls {
-                    try? fm.removeItem(at: url)
-                }
-            }
-        default:
-            if olderThanDays == nil && exclusions.isEmpty {
                 let targetURL = home.appendingPathComponent(relativePath)
                 guard fm.fileExists(atPath: targetURL.path) else { return }
                 try fm.removeItem(at: targetURL)
-            } else {
-                let urls = getChildren(home: home, olderThanDays: olderThanDays, exclusions: exclusions)
-                for url in urls {
-                    try? fm.removeItem(at: url)
-                }
+            }
+        } else {
+            let urls = getChildren(home: home, olderThanDays: olderThanDays, exclusions: exclusions)
+            for url in urls {
+                try? fm.removeItem(at: url)
             }
         }
     }
@@ -384,25 +385,35 @@ public enum JunkCategory: String, CaseIterable {
         }
     }
     
-    public func countUnavailableSimulators() -> Int {
+    private func runSimctl(arguments: [String], captureOutput: Bool = false) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["simctl", "list", "devices"]
+        process.arguments = ["simctl"] + arguments
         
         let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe() // Mute standard error
+        if captureOutput {
+            process.standardOutput = pipe
+        } else {
+            process.standardOutput = Pipe()
+        }
+        process.standardError = Pipe()
         
         do {
             try process.run()
             process.waitUntilExit()
-            
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8) {
-                return parseUnavailableSimulatorsCount(from: output)
+            if captureOutput {
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                return String(data: data, encoding: .utf8)
             }
         } catch {
-            return 0
+            return nil
+        }
+        return nil
+    }
+
+    public func countUnavailableSimulators() -> Int {
+        if let output = runSimctl(arguments: ["list", "devices"], captureOutput: true) {
+            return parseUnavailableSimulatorsCount(from: output)
         }
         return 0
     }
@@ -414,21 +425,11 @@ public enum JunkCategory: String, CaseIterable {
     }
     
     private func deleteUnavailableSimulators() throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["simctl", "delete", "unavailable"]
-        
-        try process.run()
-        process.waitUntilExit()
+        _ = runSimctl(arguments: ["delete", "unavailable"])
     }
     
     private func eraseAllSimulators() throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["simctl", "erase", "all"]
-        
-        try process.run()
-        process.waitUntilExit()
+        _ = runSimctl(arguments: ["erase", "all"])
     }
     
     public var id: String {

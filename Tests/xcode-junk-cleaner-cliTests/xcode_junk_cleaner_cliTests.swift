@@ -65,5 +65,25 @@ struct XcodeJunkCleanerTests {
         // Test -s flag
         let shortSafeCleaner = try XcodeJunkCleaner.parse(["-s"])
         #expect(shortSafeCleaner.safe)
+        
+        // Test --json flag
+        let jsonCleaner = try XcodeJunkCleaner.parse(["--json"])
+        #expect(jsonCleaner.json)
+        
+        // Test --quiet flag
+        let quietCleaner = try XcodeJunkCleaner.parse(["--quiet"])
+        #expect(quietCleaner.quiet)
+        
+        // Test -q flag
+        let shortQuietCleaner = try XcodeJunkCleaner.parse(["-q"])
+        #expect(shortQuietCleaner.quiet)
+        
+        // Test --category option (single)
+        let categoryCleaner = try XcodeJunkCleaner.parse(["--category", "derivedData"])
+        #expect(categoryCleaner.category == ["derivedData"])
+        
+        // Test -c option (multiple)
+        let multiCategoryCleaner = try XcodeJunkCleaner.parse(["-c", "derivedData", "-c", "archives"])
+        #expect(multiCategoryCleaner.category == ["derivedData", "archives"])
     }
 }

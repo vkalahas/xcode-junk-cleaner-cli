@@ -422,4 +422,40 @@ public enum JunkCategory: String, CaseIterable {
             try? FileManager.default.removeItem(at: url)
         }
     }
+    
+    public var id: String {
+        switch self {
+        case .derivedData: return "derivedData"
+        case .archives: return "archives"
+        case .iOSDeviceSupport: return "iOSDeviceSupport"
+        case .watchOSDeviceSupport: return "watchOSDeviceSupport"
+        case .tvOSDeviceSupport: return "tvOSDeviceSupport"
+        case .simulatorDevices: return "simulatorDevices"
+        case .simulatorCaches: return "simulatorCaches"
+        case .xcodeCaches: return "xcodeCaches"
+        case .spmCaches: return "spmCaches"
+        case .deviceLogs: return "deviceLogs"
+        case .userSimulatorRuntimes: return "userSimulatorRuntimes"
+        case .cocoaPodsCache: return "cocoaPodsCache"
+        case .carthageCache: return "carthageCache"
+        case .simulatorLogs: return "simulatorLogs"
+        case .playgroundTemp: return "playgroundTemp"
+        case .mobileDeviceCrashLogs: return "mobileDeviceCrashLogs"
+        case .orphanedDerivedData: return "orphanedDerivedData"
+        case .transporterCache: return "transporterCache"
+        case .transporterInstall: return "transporterInstall"
+        case .unavailableSimulators: return "unavailableSimulators"
+        case .xrOSDeviceSupport: return "xrOSDeviceSupport"
+        case .visionOSDeviceSupport: return "visionOSDeviceSupport"
+        case .interfaceBuilderCache: return "interfaceBuilderCache"
+        case .legacyDocSets: return "legacyDocSets"
+        case .cocoaPodsRepos: return "cocoaPodsRepos"
+        case .transporterLogs: return "transporterLogs"
+        case .xcodeDiagnosticReports: return "xcodeDiagnosticReports"
+        }
+    }
+    
+    public static func from(id: String) -> JunkCategory? {
+        return JunkCategory.allCases.first { $0.id.lowercased() == id.lowercased() }
+    }
 }

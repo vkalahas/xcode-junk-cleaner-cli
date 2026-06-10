@@ -667,6 +667,8 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
             }
         }
         
+        print("DEBUG: targetCategories count = \(targetCategories.count), names = \(targetCategories.map { $0.id })")
+        
         if targetCategories.isEmpty {
             if json {
                 outputJson(ScanResult(totalBytes: 0, categories: []))

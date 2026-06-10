@@ -68,6 +68,19 @@ struct HistoricalCleanup: Codable {
     let reclaimedBytes: Int64
 }
 
+actor ScanProgress {
+    private(set) var completedCount = 0
+    let totalCount: Int
+    
+    init(totalCount: Int) {
+        self.totalCount = totalCount
+    }
+    
+    func increment() {
+        completedCount += 1
+    }
+}
+
 // MARK: - Main Command
 
 @main
@@ -182,6 +195,16 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         #else
         return false
         #endif
+    }
+    
+    private func progressBar(completed: Int, total: Int, width: Int = 20) -> String {
+        guard total > 0 else { return "" }
+        let fraction = Double(completed) / Double(total)
+        let filledLength = Int(Double(width) * fraction)
+        let emptyLength = width - filledLength
+        let filledPart = String(repeating: "█", count: filledLength)
+        let emptyPart = String(repeating: "░", count: emptyLength)
+        return "[\(filledPart)\(emptyPart)]"
     }
     
     internal func parseSizeThreshold(_ sizeStr: String) -> Int64? {
@@ -591,29 +614,54 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         var scannedCategories: [(category: JunkCategory, size: Int64)] = []
         var totalBytes: Int64 = 0
         
-        for category in targetCategories {
-            log("   Analyzing \(category.displayName)... ", terminator: "")
-            fflush(stdout)
-            
-            let size = category.calculateSize(olderThanDays: olderThan, exclusions: exclusions)
-            scannedCategories.append((category, size))
-            totalBytes += size
-            
-            let sizeStr: String
-            if category == .unavailableSimulators {
-                sizeStr = "\(size) devices"
-            } else {
-                sizeStr = JunkCategory.formatBytes(size)
-            }
-            
-            if size > 0 {
-                log(sizeStr.colored(.boldYellow))
-            } else {
-                log("0 B (Clean)".colored(.green))
+        let progress = ScanProgress(totalCount: targetCategories.count)
+        let isSpinnerEnabled = isInteractiveTerminal && !json && !quiet
+        
+        var spinnerTask: Task<Void, Never>? = nil
+        if isSpinnerEnabled {
+            spinnerTask = Task {
+                let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+                var frameIndex = 0
+                while !Task.isCancelled {
+                    let completed = await progress.completedCount
+                    let total = progress.totalCount
+                    let bar = progressBar(completed: completed, total: total)
+                    print("\r   \(frames[frameIndex]) Scanning Xcode junk folders... \(bar) (\(completed)/\(total))".colored(.cyan), terminator: "")
+                    fflush(stdout)
+                    frameIndex = (frameIndex + 1) % frames.count
+                    try? await Task.sleep(nanoseconds: 80_000_000)
+                }
             }
         }
         
-        fflush(stdout)
+        let targetCategoriesWithIndices = targetCategories.enumerated().map { ($0, $1) }
+        let resultsWithIndices = await withTaskGroup(of: (Int, JunkCategory, Int64).self) { group in
+            for (index, category) in targetCategoriesWithIndices {
+                group.addTask {
+                    let size = category.calculateSize(olderThanDays: olderThan, exclusions: exclusions)
+                    await progress.increment()
+                    return (index, category, size)
+                }
+            }
+            
+            var list: [(Int, JunkCategory, Int64)] = []
+            for await item in group {
+                list.append(item)
+            }
+            return list.sorted { $0.0 < $1.0 }
+        }
+        
+        if let spinnerTask = spinnerTask {
+            spinnerTask.cancel()
+            _ = await spinnerTask.result
+            // Clear spinner line
+            print("\r                                                                                         \r", terminator: "")
+            fflush(stdout)
+        }
+        
+        scannedCategories = resultsWithIndices.map { ($0.1, $0.2) }
+        totalBytes = scannedCategories.reduce(0) { $0 + $1.1 }
+        
         log("=========================================================".colored(.cyan))
         
         // Handle no junk found case
@@ -641,6 +689,9 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
                 
                 if category == .unavailableSimulators {
                     pathDisplay = "xcrun simctl delete unavailable"
+                    sizeDisplay = "\(size) devices"
+                } else if category == .previewSimulators {
+                    pathDisplay = "xcrun simctl --set previews delete all"
                     sizeDisplay = "\(size) devices"
                 } else {
                     pathDisplay = "~/\(category.relativePath)"
@@ -808,6 +859,10 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
                 print("   Action: xcrun simctl delete unavailable".colored(.yellow))
                 print("   Description: \(category.description)")
                 print("   Status: \(size) unavailable devices found".colored(.boldYellow))
+            } else if category == .previewSimulators {
+                print("   Action: xcrun simctl --set previews delete all".colored(.yellow))
+                print("   Description: \(category.description)")
+                print("   Status: \(size) preview devices found".colored(.boldYellow))
             } else {
                 print("   Path: ~/\(category.relativePath)".colored(.yellow))
                 print("   Description: \(category.description)")
@@ -875,7 +930,7 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         
         do {
             try category.delete(olderThanDays: self.olderThan, exclusions: self.resolvedExclusions, backupDir: self.resolvedBackupURL)
-            if category == .unavailableSimulators {
+            if category == .unavailableSimulators || category == .previewSimulators {
                 log("[SUCCESS] Cleaned \(size) devices".colored(.boldGreen))
                 return (0, nil)
             } else {

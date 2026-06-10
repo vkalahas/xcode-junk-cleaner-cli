@@ -1,6 +1,6 @@
 import Foundation
 
-public enum JunkCategory: String, CaseIterable {
+public enum JunkCategory: String, CaseIterable, Sendable {
     case derivedData = "DerivedData"
     case archives = "Archives"
     case iOSDeviceSupport = "iOS DeviceSupport"

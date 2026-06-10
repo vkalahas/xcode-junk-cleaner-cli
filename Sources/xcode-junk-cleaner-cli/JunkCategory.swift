@@ -373,14 +373,18 @@ public enum JunkCategory: String, CaseIterable {
             
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             if let output = String(data: data, encoding: .utf8) {
-                let lines = output.components(separatedBy: .newlines)
-                let unavailableLines = lines.filter { $0.contains("(unavailable)") }
-                return unavailableLines.count
+                return parseUnavailableSimulatorsCount(from: output)
             }
         } catch {
             return 0
         }
         return 0
+    }
+    
+    internal func parseUnavailableSimulatorsCount(from output: String) -> Int {
+        let lines = output.components(separatedBy: .newlines)
+        let unavailableLines = lines.filter { $0.contains("(unavailable)") }
+        return unavailableLines.count
     }
     
     private func deleteUnavailableSimulators() throws {

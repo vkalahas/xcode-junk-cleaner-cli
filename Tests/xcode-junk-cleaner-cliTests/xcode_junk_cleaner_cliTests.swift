@@ -188,4 +188,123 @@ struct XcodeJunkCleanerTests {
             #expect(!matchedNames.contains(file))
         }
     }
+    
+    @Test("Test JSON Round-Trip Serialization")
+    func testJSONRoundTrip() throws {
+        let categoryResult = JunkCategoryScanResult(
+            id: "derivedData",
+            displayName: "Derived Data",
+            relativePath: "Library/Developer/Xcode/DerivedData",
+            sizeBytes: 1048576,
+            description: "Build output",
+            isSafe: true
+        )
+        
+        let scanResult = ScanResult(totalBytes: 1048576, categories: [categoryResult])
+        
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        
+        let data = try encoder.encode(scanResult)
+        let decoded = try decoder.decode(ScanResult.self, from: data)
+        
+        #expect(decoded.totalBytes == 1048576)
+        #expect(decoded.categories.count == 1)
+        #expect(decoded.categories.first?.id == "derivedData")
+        #expect(decoded.categories.first?.displayName == "Derived Data")
+        #expect(decoded.categories.first?.relativePath == "Library/Developer/Xcode/DerivedData")
+        #expect(decoded.categories.first?.sizeBytes == 1048576)
+        #expect(decoded.categories.first?.description == "Build output")
+        #expect(decoded.categories.first?.isSafe == true)
+        
+        // Test Deletion Result
+        let deletionDetail = DeletionDetail(
+            id: "derivedData",
+            displayName: "Derived Data",
+            reclaimedBytes: 1048576,
+            status: "success",
+            error: nil
+        )
+        
+        let deletionResult = DeletionResult(totalReclaimedBytes: 1048576, deletedCategories: [deletionDetail])
+        let deletionData = try encoder.encode(deletionResult)
+        let decodedDeletion = try decoder.decode(DeletionResult.self, from: deletionData)
+        
+        #expect(decodedDeletion.totalReclaimedBytes == 1048576)
+        #expect(decodedDeletion.deletedCategories.count == 1)
+        #expect(decodedDeletion.deletedCategories.first?.id == "derivedData")
+        #expect(decodedDeletion.deletedCategories.first?.reclaimedBytes == 1048576)
+        #expect(decodedDeletion.deletedCategories.first?.status == "success")
+        #expect(decodedDeletion.deletedCategories.first?.error == nil)
+    }
+
+    @Test("Test simctl Output Parsing")
+    func testSimctlOutputParsing() {
+        let mockOutputZero = """
+        == Devices ==
+        -- iOS 17.0 --
+            iPhone 15 (12345) (Shutdown) 
+            iPhone 15 Pro (67890) (Booted)
+        """
+        #expect(JunkCategory.unavailableSimulators.parseUnavailableSimulatorsCount(from: mockOutputZero) == 0)
+        
+        let mockOutputMultiple = """
+        == Devices ==
+        -- iOS 16.0 --
+            iPhone 14 (AAAAA) (Shutdown) (unavailable)
+            iPhone 14 Pro (BBBBB) (Shutdown) (unavailable)
+        -- iOS 17.0 --
+            iPhone 15 (12345) (Shutdown) 
+            iPhone 15 Pro (67890) (Booted) (unavailable)
+        """
+        #expect(JunkCategory.unavailableSimulators.parseUnavailableSimulatorsCount(from: mockOutputMultiple) == 3)
+        
+        let mockOutputEmpty = ""
+        #expect(JunkCategory.unavailableSimulators.parseUnavailableSimulatorsCount(from: mockOutputEmpty) == 0)
+    }
+
+    @Test("Test formatBytes Boundary Values")
+    func testFormatBytesBoundaries() {
+        // Test negative value
+        #expect(JunkCategory.formatBytes(-100) == "-100 B")
+        
+        // Test Terabyte scale (1024 GB)
+        let oneTB: Int64 = 1099511627776 // 1024 * 1024 * 1024 * 1024
+        #expect(JunkCategory.formatBytes(oneTB) == "1024.00 GB")
+        
+        // Test Petabyte scale (defaults to GB as per formatting limits)
+        let onePB: Int64 = 1125899906842624
+        #expect(JunkCategory.formatBytes(onePB) == "1048576.00 GB")
+    }
+
+    @Test("Test Recursive Directory Deletion")
+    func testRecursiveDirectoryDeletion() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
+        
+        defer {
+            try? fm.removeItem(at: tempDir)
+        }
+        
+        // Add subfolders and files
+        let subDir = tempDir.appendingPathComponent("SubFolder")
+        try fm.createDirectory(at: subDir, withIntermediateDirectories: true, attributes: nil)
+        
+        let file1 = tempDir.appendingPathComponent("file1.txt")
+        let file2 = subDir.appendingPathComponent("file2.txt")
+        
+        try "data1".write(to: file1, atomically: true, encoding: .utf8)
+        try "data2".write(to: file2, atomically: true, encoding: .utf8)
+        
+        #expect(fm.fileExists(atPath: file1.path))
+        #expect(fm.fileExists(atPath: file2.path))
+        
+        // Perform deletion
+        try fm.removeItem(at: tempDir)
+        
+        #expect(!fm.fileExists(atPath: tempDir.path))
+        #expect(!fm.fileExists(atPath: file1.path))
+        #expect(!fm.fileExists(atPath: file2.path))
+    }
 }

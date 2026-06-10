@@ -30,7 +30,15 @@ Most Xcode cleaning utilities are simple shell scripts that run blind delete com
 * **Apple Daemon Integration**: Rather than manually purging database files under the hood (which can corrupt simulator state), the tool communicates directly with Apple's CoreSimulator daemon. It runs subprocess checks to find and delete only unavailable simulator configurations via `xcrun simctl delete unavailable`.
 * **Safe Simulator Reset**: When cleaning all simulator devices, instead of executing raw file deletion that can leave simulator daemons in a corrupted state, the tool executes `xcrun simctl erase all`. This safely factory resets all simulators through CoreSimulator's official management interface, purging internal containers while preserving the simulator list.
 * **Granular Log Filtering**: The tool parses the user's `DiagnosticReports` folder and cleans only logs matching developer binaries (such as `Xcode`, `swift-frontend`, `Simulator`, and `lldb-rpc-server`) while leaving system crash logs untouched.
-* **Active Process Checking**: Using macOS `AppKit` and `NSRunningApplication`, the tool detects if Xcode is active. It prevents lock conflicts or database corruption by warning the user and blocking deletion in automated environments unless bypassed.
+* **Active Process Checking**: Using macOS `AppKit` and `NSRunningApplication`, the tool detects if Xcode or Simulator is active. It prevents lock conflicts or database corruption by warning the user and blocking deletion in automated environments unless bypassed.
+
+## Dependency Philosophy (Ultra-Lightweight)
+
+This tool is designed to be as fast as possible to download, compile, and run on demand directly from GitHub. It has an **ultra-lightweight dependency stack**:
+* **Zero terminal rendering libraries**: All visual rendering (including real-time spinners, dynamic loading progress bars, and table formatting) is implemented directly in native Swift using standard terminal ANSI codes.
+* **Single external dependency**: The project depends solely on Apple's standard [swift-argument-parser](https://github.com/apple/swift-argument-parser) library for command-line options parsing.
+
+This ensures that running `swift run --package ...` compiles in seconds and does not clutter your build caches with third-party frameworks.
 
 ## Clean Options and Safety Groups
 
@@ -41,6 +49,8 @@ Caches, logs, and temporary files that Apple developer tools regenerate automati
 * **Derived Data** (Build intermediates and index databases)
 * **Orphaned Derived Data** (Caches of deleted projects)
 * **Caches** (Xcode caches, Interface Builder render caches, simulator temp logs, Transporter caches)
+* **SwiftUI Previews Cache** (SwiftUI canvas preview cache and assets)
+* **SwiftUI Preview Simulators** (Simulator devices created specifically for SwiftUI Previews)
 * **Clogs and logs** (Transporter logs, CoreSimulator console logs, device diagnostic logs)
 * **Diagnostic Reports** (Crash logs matching Xcode and compiler tools)
 * **Platform DeviceSupport** (iOS, watchOS, tvOS, visionOS/xrOS debugging symbols)

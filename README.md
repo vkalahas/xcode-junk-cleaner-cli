@@ -6,11 +6,13 @@ The tool is designed to be both agent-friendly (for use by AI coding assistants 
 
 ## Why a Native Swift Implementation?
 
-Most Xcode cleaning utilities are simple shell scripts that run blind delete commands. Because this tool is written in native Swift using Apple's Foundation libraries, it performs deep, context-aware analysis:
+Most Xcode cleaning utilities are simple shell scripts that run blind delete commands. Because this tool is written in native Swift using Apple's Foundation and AppKit libraries, it performs deep, context-aware analysis:
 
 * **Orphaned Derived Data Detection**: Instead of deleting all build data, the tool reads the `info.plist` configuration inside each DerivedData subdirectory using `PropertyListSerialization`. It extracts the `WorkspacePath` to check if the source project still exists on your system. If the project was deleted or moved, its DerivedData is flagged as orphaned and safely removed.
 * **Apple Daemon Integration**: Rather than manually purging database files under the hood (which can corrupt simulator state), the tool communicates directly with Apple's CoreSimulator daemon. It runs subprocess checks to find and delete only unavailable simulator configurations via `xcrun simctl delete unavailable`.
+* **Safe Simulator Reset**: When cleaning all simulator devices, instead of executing raw file deletion that can leave simulator daemons in a corrupted state, the tool executes `xcrun simctl erase all`. This safely factory resets all simulators through CoreSimulator's official management interface, purging internal containers while preserving the simulator list.
 * **Granular Log Filtering**: The tool parses the user's `DiagnosticReports` folder and cleans only logs matching developer binaries (such as `Xcode`, `swift-frontend`, `Simulator`, and `lldb-rpc-server`) while leaving system crash logs untouched.
+* **Active Process Checking**: Using macOS `AppKit` and `NSRunningApplication`, the tool detects if Xcode is active. It prevents lock conflicts or database corruption by warning the user and blocking deletion in automated environments unless bypassed.
 
 ## Clean Options and Safety Groups
 
@@ -50,6 +52,9 @@ swift run xcode-junk-cleaner-cli
 * `--json`: Output results in structured JSON format.
 * `-q, --quiet`: Silence all standard logging output.
 * `-c, --category <id>`: Target a specific category to scan or clean (comma-separated list of IDs, or repeat the option).
+* `-o, --older-than <days>`: Filters directories, scanning and deleting only folders that have not been modified in the specified number of days.
+* `-t, --threshold <size>`: Triggers a threshold warning and exits with exit code 3 if the total scanned junk exceeds the specified size limit (e.g. `5GB`, `500MB`).
+* `-f, --force`: Bypasses the active Xcode process check.
 * `-h, --help`: Show help information.
 
 Example for automated safe cleaning:
@@ -88,3 +93,5 @@ swift run xcode-junk-cleaner-cli --safe --json -c spmCaches
 * `0`: Success (action completed or system clean).
 * `1`: General error or invalid arguments.
 * `2`: Non-interactive safety violation (trying to delete without explicit automated flags).
+* `3`: Disk space threshold exceeded (the total scanned junk exceeds the specified `--threshold` limit).
+* `4`: Active Xcode process check failed (Xcode is running and `--force` was not provided).

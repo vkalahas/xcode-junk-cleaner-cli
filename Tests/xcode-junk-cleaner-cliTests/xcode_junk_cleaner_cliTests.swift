@@ -307,4 +307,131 @@ struct XcodeJunkCleanerTests {
         #expect(!fm.fileExists(atPath: file1.path))
         #expect(!fm.fileExists(atPath: file2.path))
     }
+    
+    @Test("Test threshold size parsing")
+    func testThresholdSizeParsing() {
+        let cleaner = XcodeJunkCleaner()
+        #expect(cleaner.parseSizeThreshold("5GB") == 5368709120)
+        #expect(cleaner.parseSizeThreshold("500MB") == 524288000)
+        #expect(cleaner.parseSizeThreshold("10KB") == 10240)
+        #expect(cleaner.parseSizeThreshold("100B") == 100)
+        #expect(cleaner.parseSizeThreshold("1.5GB") == 1610612736)
+        #expect(cleaner.parseSizeThreshold("0B") == 0)
+        #expect(cleaner.parseSizeThreshold("12345") == 12345)
+        #expect(cleaner.parseSizeThreshold("abc") == nil)
+        #expect(cleaner.parseSizeThreshold("5XX") == nil)
+    }
+    
+    @Test("Test new CLI flags parsing")
+    func testNewCLIFlagsParsing() throws {
+        // Test --older-than / -o
+        let olderCleaner = try XcodeJunkCleaner.parse(["--older-than", "30"])
+        #expect(olderCleaner.olderThan == 30)
+        let shortOlderCleaner = try XcodeJunkCleaner.parse(["-o", "15"])
+        #expect(shortOlderCleaner.olderThan == 15)
+        
+        // Test --threshold / -t
+        let thresholdCleaner = try XcodeJunkCleaner.parse(["--threshold", "5GB"])
+        #expect(thresholdCleaner.threshold == "5GB")
+        let shortThresholdCleaner = try XcodeJunkCleaner.parse(["-t", "500MB"])
+        #expect(shortThresholdCleaner.threshold == "500MB")
+        
+        // Test --force / -f
+        let forceCleaner = try XcodeJunkCleaner.parse(["--force"])
+        #expect(forceCleaner.force)
+        let shortForceCleaner = try XcodeJunkCleaner.parse(["-f"])
+        #expect(shortForceCleaner.force)
+    }
+    
+    @Test("Test time-based folder filtering logic")
+    func testTimeBasedFolderFiltering() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
+        
+        defer {
+            try? fm.removeItem(at: tempDir)
+        }
+        
+        // Let's mock a category folder, say DerivedData
+        let mockHome = tempDir
+        let mockDerivedDataPath = mockHome.appendingPathComponent("Library/Developer/Xcode/DerivedData")
+        try fm.createDirectory(at: mockDerivedDataPath, withIntermediateDirectories: true, attributes: nil)
+        
+        // Folder 1: Old folder (40 days ago)
+        let oldFolder = mockDerivedDataPath.appendingPathComponent("OldProject-abc")
+        try fm.createDirectory(at: oldFolder, withIntermediateDirectories: true, attributes: nil)
+        
+        let fileInOld = oldFolder.appendingPathComponent("build.log")
+        try "old data".write(to: fileInOld, atomically: true, encoding: .utf8)
+        
+        let fortyDaysAgo = Date().addingTimeInterval(-40 * 24 * 60 * 60)
+        try fm.setAttributes([.modificationDate: fortyDaysAgo], ofItemAtPath: oldFolder.path)
+        try fm.setAttributes([.modificationDate: fortyDaysAgo], ofItemAtPath: fileInOld.path)
+        
+        // Folder 2: New folder (recent / now)
+        let newFolder = mockDerivedDataPath.appendingPathComponent("NewProject-def")
+        try fm.createDirectory(at: newFolder, withIntermediateDirectories: true, attributes: nil)
+        
+        let fileInNew = newFolder.appendingPathComponent("build.log")
+        try "new data".write(to: fileInNew, atomically: true, encoding: .utf8)
+        
+        let oneDayAgo = Date().addingTimeInterval(-1 * 24 * 60 * 60)
+        try fm.setAttributes([.modificationDate: oneDayAgo], ofItemAtPath: newFolder.path)
+        try fm.setAttributes([.modificationDate: oneDayAgo], ofItemAtPath: fileInNew.path)
+        
+        // Verify isURLOlderThan helper on JunkCategory
+        let category = JunkCategory.derivedData
+        #expect(category.isURLOlderThan(url: oldFolder, days: 30) == true)
+        #expect(category.isURLOlderThan(url: newFolder, days: 30) == false)
+        
+        // Test getChildren(home:olderThanDays:)
+        let allChildren = category.getChildren(home: mockHome, olderThanDays: nil)
+        #expect(allChildren.count == 2)
+        
+        let oldChildren = category.getChildren(home: mockHome, olderThanDays: 30)
+        #expect(oldChildren.count == 1)
+        #expect(oldChildren.first?.lastPathComponent == "OldProject-abc")
+        
+        let totalSize = category.calculateSize(home: mockHome, olderThanDays: nil)
+        #expect(totalSize > 0)
+        
+        let oldSize = category.calculateSize(home: mockHome, olderThanDays: 30)
+        #expect(oldSize == Int64("old data".utf8.count))
+    }
+    
+    @Test("Test time-based folder deletion logic")
+    func testTimeBasedFolderDeletion() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
+        
+        defer {
+            try? fm.removeItem(at: tempDir)
+        }
+        
+        let mockHome = tempDir
+        let mockDerivedDataPath = mockHome.appendingPathComponent("Library/Developer/Xcode/DerivedData")
+        try fm.createDirectory(at: mockDerivedDataPath, withIntermediateDirectories: true, attributes: nil)
+        
+        // Folder 1: Old folder (40 days ago)
+        let oldFolder = mockDerivedDataPath.appendingPathComponent("OldProject-abc")
+        try fm.createDirectory(at: oldFolder, withIntermediateDirectories: true, attributes: nil)
+        let fortyDaysAgo = Date().addingTimeInterval(-40 * 24 * 60 * 60)
+        try fm.setAttributes([.modificationDate: fortyDaysAgo], ofItemAtPath: oldFolder.path)
+        
+        // Folder 2: New folder (1 day ago)
+        let newFolder = mockDerivedDataPath.appendingPathComponent("NewProject-def")
+        try fm.createDirectory(at: newFolder, withIntermediateDirectories: true, attributes: nil)
+        let oneDayAgo = Date().addingTimeInterval(-1 * 24 * 60 * 60)
+        try fm.setAttributes([.modificationDate: oneDayAgo], ofItemAtPath: newFolder.path)
+        
+        // Perform deletion older than 30 days
+        let category = JunkCategory.derivedData
+        try category.delete(home: mockHome, olderThanDays: 30)
+        
+        // Old folder should be deleted, new folder should remain
+        #expect(!fm.fileExists(atPath: oldFolder.path))
+        #expect(fm.fileExists(atPath: newFolder.path))
+    }
 }

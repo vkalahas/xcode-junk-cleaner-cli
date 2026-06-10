@@ -209,55 +209,44 @@ public enum JunkCategory: String, CaseIterable {
     }
     
     /// Calculates directory size recursively in bytes.
-    public func calculateSize() -> Int64 {
-        switch self {
-        case .orphanedDerivedData:
-            return calculateOrphanedDerivedDataSize()
-        case .unavailableSimulators:
+    public func calculateSize(home: URL = FileManager.default.homeDirectoryForCurrentUser, olderThanDays: Int? = nil) -> Int64 {
+        if self == .unavailableSimulators {
             return Int64(countUnavailableSimulators())
-        case .xcodeDiagnosticReports:
-            return calculateDiagnosticReportsSize()
-        default:
-            break
         }
         
-        let path = url.path
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else {
-            return 0
-        }
-        
-        if !isDir.boolValue {
-            do {
-                let attrs = try FileManager.default.attributesOfItem(atPath: path)
-                return attrs[.size] as? Int64 ?? 0
-            } catch {
-                return 0
-            }
-        }
-        
+        let fm = FileManager.default
+        let urls = getChildren(home: home, olderThanDays: olderThanDays)
         var totalSize: Int64 = 0
         let properties: [URLResourceKey] = [.fileSizeKey, .isDirectoryKey]
         
-        guard let enumerator = FileManager.default.enumerator(
-            at: url,
-            includingPropertiesForKeys: properties,
-            options: [.skipsHiddenFiles],
-            errorHandler: nil
-        ) else {
-            return 0
-        }
-        
-        for case let fileURL as URL in enumerator {
-            do {
-                let values = try fileURL.resourceValues(forKeys: Set(properties))
-                if let isDirectory = values.isDirectory, !isDirectory {
-                    if let fileSize = values.fileSize {
-                        totalSize += Int64(fileSize)
-                    }
+        for url in urls {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
+            
+            if !isDir.boolValue {
+                if let attrs = try? fm.attributesOfItem(atPath: url.path),
+                   let size = attrs[.size] as? Int64 {
+                    totalSize += size
                 }
-            } catch {
-                // Ignore individual file errors to continue scanning remaining files
+                continue
+            }
+            
+            // Recursive scan
+            guard let enumerator = fm.enumerator(
+                at: url,
+                includingPropertiesForKeys: properties,
+                options: [.skipsHiddenFiles],
+                errorHandler: nil
+            ) else {
+                continue
+            }
+            
+            for case let fileURL as URL in enumerator {
+                if let values = try? fileURL.resourceValues(forKeys: Set(properties)),
+                   let isDirectory = values.isDirectory, !isDirectory,
+                   let fileSize = values.fileSize {
+                    totalSize += Int64(fileSize)
+                }
             }
         }
         
@@ -265,41 +254,100 @@ public enum JunkCategory: String, CaseIterable {
     }
     
     /// Deletes the folder and its contents recursively.
-    public func delete() throws {
+    public func delete(home: URL = FileManager.default.homeDirectoryForCurrentUser, olderThanDays: Int? = nil) throws {
+        let fm = FileManager.default
         switch self {
-        case .orphanedDerivedData:
-            try deleteOrphanedDerivedData()
         case .unavailableSimulators:
             try deleteUnavailableSimulators()
-        case .xcodeDiagnosticReports:
-            try deleteDiagnosticReports()
+        case .simulatorDevices:
+            if olderThanDays == nil {
+                try eraseAllSimulators()
+            } else {
+                let urls = getChildren(home: home, olderThanDays: olderThanDays)
+                for url in urls {
+                    try? fm.removeItem(at: url)
+                }
+            }
         default:
-            let fm = FileManager.default
-            guard fm.fileExists(atPath: url.path) else { return }
-            try fm.removeItem(at: url)
+            if olderThanDays == nil {
+                let targetURL = home.appendingPathComponent(relativePath)
+                guard fm.fileExists(atPath: targetURL.path) else { return }
+                try fm.removeItem(at: targetURL)
+            } else {
+                let urls = getChildren(home: home, olderThanDays: olderThanDays)
+                for url in urls {
+                    try? fm.removeItem(at: url)
+                }
+            }
         }
     }
     
     /// Helper to format bytes to human readable string
     public static func formatBytes(_ bytes: Int64) -> String {
-        let kb = Double(bytes) / 1024.0
+        let isNegative = bytes < 0
+        let absoluteBytes = abs(bytes)
+        
+        let kb = Double(absoluteBytes) / 1024.0
         let mb = kb / 1024.0
         let gb = mb / 1024.0
         
+        let prefix = isNegative ? "-" : ""
+        
         if gb >= 1.0 {
-            return String(format: "%.2f GB", gb)
+            return String(format: "%@%.2f GB", prefix, gb)
         } else if mb >= 1.0 {
-            return String(format: "%.2f MB", mb)
+            return String(format: "%@%.2f MB", prefix, mb)
         } else if kb >= 1.0 {
-            return String(format: "%.2f KB", kb)
+            return String(format: "%@%.2f KB", prefix, kb)
         } else {
-            return "\(bytes) B"
+            return "\(prefix)\(absoluteBytes) B"
         }
     }
     
-    // MARK: - Private Helpers for Advanced Cleanups
-    
     // MARK: - Private / Internal Helpers for Advanced Cleanups
+    
+    internal func isURLOlderThan(url: URL, days: Int) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let modDate = attrs[.modificationDate] as? Date else {
+            return false
+        }
+        let thresholdDate = Date().addingTimeInterval(TimeInterval(-days * 24 * 60 * 60))
+        return modDate < thresholdDate
+    }
+    
+    internal func getChildren(home: URL = FileManager.default.homeDirectoryForCurrentUser, olderThanDays: Int? = nil) -> [URL] {
+        let fm = FileManager.default
+        
+        if self == .unavailableSimulators {
+            return []
+        }
+        
+        if self == .orphanedDerivedData {
+            let urls = getOrphanedDerivedDataURLs(home: home)
+            if let days = olderThanDays {
+                return urls.filter { isURLOlderThan(url: $0, days: days) }
+            }
+            return urls
+        }
+        
+        if self == .xcodeDiagnosticReports {
+            let urls = getDiagnosticReportURLs(home: home)
+            if let days = olderThanDays {
+                return urls.filter { isURLOlderThan(url: $0, days: days) }
+            }
+            return urls
+        }
+        
+        let targetURL = home.appendingPathComponent(relativePath)
+        guard let contents = try? fm.contentsOfDirectory(at: targetURL, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        
+        if let days = olderThanDays {
+            return contents.filter { isURLOlderThan(url: $0, days: days) }
+        }
+        return contents
+    }
     
     internal func getOrphanedDerivedDataURLs(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
         let fm = FileManager.default
@@ -325,36 +373,17 @@ public enum JunkCategory: String, CaseIterable {
         return orphanedURLs
     }
     
-    internal func calculateOrphanedDerivedDataSize(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Int64 {
-        let urls = getOrphanedDerivedDataURLs(home: home)
-        var total: Int64 = 0
-        let properties: [URLResourceKey] = [.fileSizeKey, .isDirectoryKey]
-        
-        for url in urls {
-            guard let enumerator = FileManager.default.enumerator(
-                at: url,
-                includingPropertiesForKeys: properties,
-                options: [.skipsHiddenFiles],
-                errorHandler: nil
-            ) else {
-                continue
-            }
-            
-            for case let fileURL as URL in enumerator {
-                if let values = try? fileURL.resourceValues(forKeys: Set(properties)),
-                   let isDirectory = values.isDirectory, !isDirectory,
-                   let fileSize = values.fileSize {
-                    total += Int64(fileSize)
-                }
-            }
+    internal func getDiagnosticReportURLs(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
+        let fm = FileManager.default
+        let diagURL = home.appendingPathComponent("Library/Logs/DiagnosticReports")
+        guard let contents = try? fm.contentsOfDirectory(at: diagURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            return []
         }
-        return total
-    }
-    
-    internal func deleteOrphanedDerivedData(home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
-        let urls = getOrphanedDerivedDataURLs(home: home)
-        for url in urls {
-            try FileManager.default.removeItem(at: url)
+        
+        let prefixes = ["Xcode_", "swift-frontend_", "Simulator_", "ibtool_", "simctl_", "actool_", "lldb-rpc-server_", "swift-connection_"]
+        return contents.filter { url in
+            let filename = url.lastPathComponent
+            return prefixes.contains { prefix in filename.hasPrefix(prefix) }
         }
     }
     
@@ -396,37 +425,13 @@ public enum JunkCategory: String, CaseIterable {
         process.waitUntilExit()
     }
     
-    internal func getDiagnosticReportURLs(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
-        let fm = FileManager.default
-        let diagURL = home.appendingPathComponent("Library/Logs/DiagnosticReports")
-        guard let contents = try? fm.contentsOfDirectory(at: diagURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
-            return []
-        }
+    private func eraseAllSimulators() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl", "erase", "all"]
         
-        let prefixes = ["Xcode_", "swift-frontend_", "Simulator_", "ibtool_", "simctl_", "actool_", "lldb-rpc-server_", "swift-connection_"]
-        return contents.filter { url in
-            let filename = url.lastPathComponent
-            return prefixes.contains { prefix in filename.hasPrefix(prefix) }
-        }
-    }
-    
-    internal func calculateDiagnosticReportsSize(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Int64 {
-        let urls = getDiagnosticReportURLs(home: home)
-        var total: Int64 = 0
-        for url in urls {
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-               let size = attrs[.size] as? Int64 {
-                total += size
-            }
-        }
-        return total
-    }
-    
-    internal func deleteDiagnosticReports(home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
-        let urls = getDiagnosticReportURLs(home: home)
-        for url in urls {
-            try? FileManager.default.removeItem(at: url)
-        }
+        try process.run()
+        process.waitUntilExit()
     }
     
     public var id: String {

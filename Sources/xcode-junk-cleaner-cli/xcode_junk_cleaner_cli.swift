@@ -1,5 +1,8 @@
 import Foundation
 import ArgumentParser
+#if os(macOS)
+import AppKit
+#endif
 
 // MARK: - JSON Model Schemas
 
@@ -85,6 +88,15 @@ struct XcodeJunkCleaner: ParsableCommand {
     @Option(name: .shortAndLong, help: "Specify particular categories to scan or clean (comma-separated list of IDs, or repeat the option).")
     var category: [String] = []
     
+    @Option(name: .shortAndLong, help: "Filters directories, scanning and deleting only folders that have not been modified in the specified number of days.")
+    var olderThan: Int?
+    
+    @Option(name: .shortAndLong, help: "Triggers a threshold warning and exits with exit code 3 if the total scanned junk exceeds the specified size limit (e.g. 5GB, 500MB).")
+    var threshold: String?
+    
+    @Flag(name: .shortAndLong, help: "Bypass the active Xcode process check.")
+    var force: Bool = false
+    
     // Parsed target category IDs
     private var selectedCategoryIds: Set<String> {
         let items = category.flatMap { $0.components(separatedBy: ",") }
@@ -96,7 +108,55 @@ struct XcodeJunkCleaner: ParsableCommand {
         return isatty(STDIN_FILENO) != 0
     }
     
+    private func isXcodeRunning() -> Bool {
+        #if os(macOS)
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dt.Xcode")
+        return !apps.isEmpty
+        #else
+        return false
+        #endif
+    }
+    
+    internal func parseSizeThreshold(_ sizeStr: String) -> Int64? {
+        let trimmed = sizeStr.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        
+        if trimmed.hasSuffix("GB") {
+            let numStr = trimmed.dropLast(2).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let val = Double(numStr) else { return nil }
+            return Int64(val * 1024 * 1024 * 1024)
+        } else if trimmed.hasSuffix("MB") {
+            let numStr = trimmed.dropLast(2).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let val = Double(numStr) else { return nil }
+            return Int64(val * 1024 * 1024)
+        } else if trimmed.hasSuffix("KB") {
+            let numStr = trimmed.dropLast(2).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let val = Double(numStr) else { return nil }
+            return Int64(val * 1024)
+        } else if trimmed.hasSuffix("B") {
+            let numStr = trimmed.dropLast(1).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let val = Int64(numStr) else { return nil }
+            return val
+        } else {
+            return Int64(trimmed)
+        }
+    }
+    
     func run() throws {
+        // Xcode process check
+        if isXcodeRunning() && !force {
+            if isInteractiveTerminal && !json && !quiet {
+                print("[WARNING] Xcode is currently running. Cleaning cache files while Xcode is running may cause instability or build failures.".colored(.boldYellow))
+                let answer = prompt(message: "Do you want to continue anyway? (y/n)", defaultOption: "n")
+                if answer != "y" && answer != "yes" {
+                    log("[INFO] Aborted by user because Xcode is running.")
+                    throw ExitCode(4)
+                }
+            } else {
+                writeToStderr("[ERROR] Xcode is currently running. Close Xcode or use --force (-f) to bypass this check.")
+                throw ExitCode(4)
+            }
+        }
+
         // Banner (silenced in quiet/json modes)
         log("")
         log("Xcode Junk Cleaner CLI v1.0.0".colored(.boldCyan))
@@ -124,7 +184,7 @@ struct XcodeJunkCleaner: ParsableCommand {
             log("   Analyzing \(category.displayName)... ", terminator: "")
             fflush(stdout)
             
-            let size = category.calculateSize()
+            let size = category.calculateSize(olderThanDays: olderThan)
             scannedCategories.append((category, size))
             totalBytes += size
             
@@ -142,6 +202,7 @@ struct XcodeJunkCleaner: ParsableCommand {
             }
         }
         
+        fflush(stdout)
         log("=========================================================".colored(.cyan))
         
         // Handle no junk found case
@@ -184,6 +245,23 @@ struct XcodeJunkCleaner: ParsableCommand {
             print("----------------------------------------------------------------------------------------------------")
             print("Total potential space to reclaim: ".colored(.bold) + JunkCategory.formatBytes(totalBytes).colored(.boldGreen))
             print("=========================================================".colored(.cyan))
+        }
+        
+        // Threshold check
+        if let thresholdStr = threshold {
+            guard let limit = parseSizeThreshold(thresholdStr) else {
+                writeToStderr("[ERROR] Invalid size threshold format: '\(thresholdStr)'. Please use formats like 5GB, 500MB, 10KB, or raw bytes.")
+                throw ExitCode(1)
+            }
+            if totalBytes > limit {
+                fflush(stdout)
+                if json {
+                    outputScanResult(scannedCategories: scannedCategories, totalBytes: totalBytes)
+                } else {
+                    writeToStderr("[WARNING] Scanned junk size of \(JunkCategory.formatBytes(totalBytes)) exceeds the threshold of \(thresholdStr).")
+                }
+                throw ExitCode(3)
+            }
         }
         
         // Handle Dry Run
@@ -380,7 +458,7 @@ struct XcodeJunkCleaner: ParsableCommand {
         fflush(stdout)
         
         do {
-            try category.delete()
+            try category.delete(olderThanDays: self.olderThan)
             if category == .unavailableSimulators {
                 log("[SUCCESS] Cleaned \(size) devices".colored(.boldGreen))
                 return (0, nil)

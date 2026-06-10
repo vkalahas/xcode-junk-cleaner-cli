@@ -15,6 +15,9 @@ struct XcodeJunkCleaner: ParsableCommand {
     @Flag(name: .shortAndLong, help: "Perform a dry run. Scan and show sizes without deleting.")
     var dryRun: Bool = false
     
+    @Flag(name: .shortAndLong, help: "Automatically delete only 100% safe junk folders (Group A) without prompting.")
+    var safe: Bool = false
+    
     func run() throws {
         // Banner
         print("")
@@ -87,6 +90,12 @@ struct XcodeJunkCleaner: ParsableCommand {
             return
         }
         
+        // Handle safe-only automated cleaning
+        if safe {
+            try cleanSafe(categories: scannedCategories)
+            return
+        }
+        
         // Handle direct approval
         if yes {
             try cleanAll(categories: scannedCategories)
@@ -124,6 +133,20 @@ struct XcodeJunkCleaner: ParsableCommand {
         var totalReclaimed: Int64 = 0
         
         for (category, size) in categories where size > 0 {
+            totalReclaimed += deleteCategory(category, size: size)
+        }
+        
+        print(Colorizer.color("=========================================================", .cyan))
+        print("🎉 Done! Reclaimed a total of ".colored(.boldGreen) + JunkCategory.formatBytes(totalReclaimed).colored(.boldGreen))
+        print("")
+    }
+    
+    // Clean only 100% safe categories (Group A)
+    private func cleanSafe(categories: [(category: JunkCategory, size: Int64)]) throws {
+        print("\n🧹 Cleaning all 100% safe (Group A) junk folders...")
+        var totalReclaimed: Int64 = 0
+        
+        for (category, size) in categories where size > 0 && category.isSafe {
             totalReclaimed += deleteCategory(category, size: size)
         }
         

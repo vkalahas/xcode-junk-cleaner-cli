@@ -57,5 +57,13 @@ struct XcodeJunkCleanerTests {
         let combinedCleaner = try XcodeJunkCleaner.parse(["-y", "-d"])
         #expect(combinedCleaner.yes)
         #expect(combinedCleaner.dryRun)
+        
+        // Test --safe flag
+        let safeCleaner = try XcodeJunkCleaner.parse(["--safe"])
+        #expect(safeCleaner.safe)
+        
+        // Test -s flag
+        let shortSafeCleaner = try XcodeJunkCleaner.parse(["-s"])
+        #expect(shortSafeCleaner.safe)
     }
 }

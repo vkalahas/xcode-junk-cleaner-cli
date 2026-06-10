@@ -11,6 +11,12 @@ public enum JunkCategory: String, CaseIterable {
     case xcodeCaches = "Xcode Caches"
     case spmCaches = "Swift Package Manager Caches"
     case deviceLogs = "Device Logs"
+    case userSimulatorRuntimes = "User Simulator Runtimes"
+    case cocoaPodsCache = "CocoaPods Cache"
+    case carthageCache = "Carthage Cache"
+    case simulatorLogs = "Simulator Logs"
+    case playgroundTemp = "Playground Temporary Files"
+    case mobileDeviceCrashLogs = "MobileDevice Crash Logs"
     
     public var displayName: String {
         switch self {
@@ -24,6 +30,12 @@ public enum JunkCategory: String, CaseIterable {
         case .xcodeCaches: return "Xcode Caches"
         case .spmCaches: return "Swift Package Manager Caches"
         case .deviceLogs: return "Device Logs"
+        case .userSimulatorRuntimes: return "User Simulator Runtimes"
+        case .cocoaPodsCache: return "CocoaPods Cache"
+        case .carthageCache: return "Carthage Cache"
+        case .simulatorLogs: return "Simulator Logs"
+        case .playgroundTemp: return "Playground Temporary Files"
+        case .mobileDeviceCrashLogs: return "MobileDevice Crash Logs"
         }
     }
     
@@ -49,6 +61,18 @@ public enum JunkCategory: String, CaseIterable {
             return "Library/Caches/org.swift.swiftpm"
         case .deviceLogs:
             return "Library/Developer/Xcode/DeviceLogs"
+        case .userSimulatorRuntimes:
+            return "Library/Developer/Developer/CoreSimulator/Profiles/Runtimes"
+        case .cocoaPodsCache:
+            return "Library/Caches/CocoaPods"
+        case .carthageCache:
+            return "Library/Caches/org.carthage.CarthageKit"
+        case .simulatorLogs:
+            return "Library/Logs/CoreSimulator"
+        case .playgroundTemp:
+            return "Library/Developer/Xcode/UserData/PlaygroundTemp"
+        case .mobileDeviceCrashLogs:
+            return "Library/Logs/CrashReporter/MobileDevice"
         }
     }
     
@@ -74,13 +98,25 @@ public enum JunkCategory: String, CaseIterable {
             return "SPM dependency clones and checkout caches. Swift builds will re-fetch them."
         case .deviceLogs:
             return "Synced crash logs from connected physical devices."
+        case .userSimulatorRuntimes:
+            return "Downloaded OS runtimes. Deleting will remove these OS versions from simulator options."
+        case .cocoaPodsCache:
+            return "Cached CocoaPods library downloads and repository specifications."
+        case .carthageCache:
+            return "Carthage dependency downloads and pre-built binaries."
+        case .simulatorLogs:
+            return "Developer log files produced by iOS simulators."
+        case .playgroundTemp:
+            return "Xcode Swift Playground temporary execution cache."
+        case .mobileDeviceCrashLogs:
+            return "Crash reports synced from connected physical devices."
         }
     }
     
     public var isSafe: Bool {
         switch self {
-        case .archives, .simulatorDevices:
-            return false // Deleting these requires caution / resets simulator setups
+        case .archives, .simulatorDevices, .userSimulatorRuntimes:
+            return false // Deleting these requires caution / resets simulator setups or runtimes
         default:
             return true
         }

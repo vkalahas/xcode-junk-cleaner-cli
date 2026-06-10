@@ -4,6 +4,24 @@ A command-line tool built natively in Swift to reclaim disk space by safely remo
 
 The tool is designed to be both agent-friendly (for use by AI coding assistants and automation scripts) and human-friendly (for direct terminal usage).
 
+## How do I use this?
+
+You don't need to manually clone or install this repository. As long as you have Swift installed (bundled with Xcode or command-line tools), you can run the utility directly from GitHub using the Swift Package Manager:
+
+```bash
+swift run --package https://github.com/vkalahas/xcode-junk-cleaner-cli xcode-junk-cleaner-cli [options]
+```
+
+For example, to run an interactive scan and clean:
+```bash
+swift run --package https://github.com/vkalahas/xcode-junk-cleaner-cli xcode-junk-cleaner-cli
+```
+
+Or to automatically clean all 100% safe files without prompts:
+```bash
+swift run --package https://github.com/vkalahas/xcode-junk-cleaner-cli xcode-junk-cleaner-cli --safe
+```
+
 ## Why a Native Swift Implementation?
 
 Most Xcode cleaning utilities are simple shell scripts that run blind delete commands. Because this tool is written in native Swift using Apple's Foundation and AppKit libraries, it performs deep, context-aware analysis:

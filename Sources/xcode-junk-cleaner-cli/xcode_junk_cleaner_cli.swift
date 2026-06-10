@@ -667,6 +667,16 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
             }
         }
         
+        if targetCategories.isEmpty {
+            if json {
+                outputJson(ScanResult(totalBytes: 0, categories: []))
+            } else {
+                log("No Xcode junk categories selected/matched. Your system is clean.".colored(.boldGreen))
+                log("")
+            }
+            return
+        }
+        
         var scannedCategories: [(category: JunkCategory, size: Int64)] = []
         var totalBytes: Int64 = 0
         
@@ -677,18 +687,11 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         if isSpinnerEnabled {
             spinnerTask = Task {
                 let n = targetCategories.count
-                var isFirstFrame = true
                 while !Task.isCancelled {
                     stateManager.incrementAnimation()
                     let snapshot = stateManager.getSnapshot()
                     
                     var output = ""
-                    if !isFirstFrame {
-                        output += "\u{001B}[\(n)A"
-                    } else {
-                        isFirstFrame = false
-                    }
-                    
                     for state in snapshot {
                         let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
                         let bar: String
@@ -707,6 +710,9 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
                         }
                         output += "\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)\n"
                     }
+                    
+                    // Move cursor up n lines
+                    output += "\u{001B}[\(n)A"
                     
                     print(output, terminator: "")
                     fflush(stdout)
@@ -738,15 +744,8 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
             spinnerTask.cancel()
             _ = await spinnerTask.result
             
-            let didPrint = stateManager.didPrint
             let snapshot = stateManager.getSnapshot()
-            let n = targetCategories.count
-            
             var output = ""
-            if didPrint {
-                output += "\u{001B}[\(n)A"
-            }
-            
             for state in snapshot {
                 let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
                 let bar: String

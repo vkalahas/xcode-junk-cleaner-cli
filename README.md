@@ -22,6 +22,10 @@ Or to automatically clean all 100% safe files without prompts:
 swift run --package https://github.com/vkalahas/xcode-junk-cleaner-cli xcode-junk-cleaner-cli --safe
 ```
 
+### Demo
+
+![Xcode Junk Cleaner CLI Demo](assets/demo.png)
+
 ## Why a Native Swift Implementation?
 
 Most Xcode cleaning utilities are simple shell scripts that run blind delete commands. Because this tool is written in native Swift using Apple's Foundation and AppKit libraries, it performs deep, context-aware analysis:

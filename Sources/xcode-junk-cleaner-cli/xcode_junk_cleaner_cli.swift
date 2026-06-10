@@ -91,6 +91,15 @@ struct XcodeJunkCleaner: ParsableCommand {
     @Option(name: .long, help: "Comma-separated list of category IDs or file path patterns to exclude from cleaning.")
     var exclude: String?
     
+    @Flag(name: .long, help: "List all custom exclusion patterns in ~/.xcode-junk-cleaner-exclude.")
+    var listExclude: Bool = false
+    
+    @Option(name: .long, help: "Add a custom exclusion pattern to ~/.xcode-junk-cleaner-exclude.")
+    var addExclude: String?
+    
+    @Option(name: .long, help: "Remove a custom exclusion pattern from ~/.xcode-junk-cleaner-exclude.")
+    var removeExclude: String?
+    
     @Option(name: .long, help: "Install a LaunchAgent plist to run the cleaner periodically (daily, weekly, monthly).")
     var installSchedule: String?
     
@@ -105,6 +114,8 @@ struct XcodeJunkCleaner: ParsableCommand {
     
     @Flag(name: .shortAndLong, help: "Bypass the active Xcode process check.")
     var force: Bool = false
+    
+    internal var homeDirectoryOverride: URL?
     
     // Parsed target category IDs
     private var selectedCategoryIds: Set<String> {
@@ -124,7 +135,7 @@ struct XcodeJunkCleaner: ParsableCommand {
         }
         
         // Load from ~/.xcode-junk-cleaner-exclude
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = homeDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser
         let excludeFileURL = home.appendingPathComponent(".xcode-junk-cleaner-exclude")
         if let content = try? String(contentsOf: excludeFileURL, encoding: .utf8) {
             let lines = content.components(separatedBy: .newlines)
@@ -320,7 +331,123 @@ struct XcodeJunkCleaner: ParsableCommand {
         #endif
     }
     
+    internal func getExcludeFileURL() -> URL {
+        let home = homeDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".xcode-junk-cleaner-exclude")
+    }
+    
+    internal func listExclusionPatterns() throws {
+        let fileURL = getExcludeFileURL()
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: fileURL.path) {
+            print("No custom exclusion patterns configured (exclude file does not exist).")
+            return
+        }
+        do {
+            let content = try String(contentsOf: fileURL, encoding: .utf8)
+            let lines = content.components(separatedBy: .newlines)
+                               .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                               .filter { !$0.isEmpty }
+            if lines.isEmpty {
+                print("No custom exclusion patterns configured (exclude file is empty).")
+            } else {
+                print("Custom exclusion patterns:")
+                for line in lines {
+                    print("  \(line)")
+                }
+            }
+        } catch {
+            writeToStderr("[ERROR] Failed to read exclude file: \(error.localizedDescription)")
+            throw ExitCode(1)
+        }
+    }
+    
+    internal func addExclusionPattern(_ pattern: String) throws {
+        let fileURL = getExcludeFileURL()
+        let fm = FileManager.default
+        var lines: [String] = []
+        if fm.fileExists(atPath: fileURL.path) {
+            if let content = try? String(contentsOf: fileURL, encoding: .utf8) {
+                lines = content.components(separatedBy: .newlines)
+                               .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                               .filter { !$0.isEmpty }
+            }
+        }
+        
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            writeToStderr("[ERROR] Exclusion pattern cannot be empty.")
+            throw ExitCode(1)
+        }
+        
+        if lines.contains(trimmed) {
+            print("Pattern '\(trimmed)' is already in the exclusion list.")
+            return
+        }
+        
+        lines.append(trimmed)
+        let newContent = lines.joined(separator: "\n") + "\n"
+        do {
+            try newContent.write(to: fileURL, atomically: true, encoding: .utf8)
+            print("[SUCCESS] Added pattern '\(trimmed)' to exclusions.")
+        } catch {
+            writeToStderr("[ERROR] Failed to write exclude file: \(error.localizedDescription)")
+            throw ExitCode(1)
+        }
+    }
+    
+    internal func removeExclusionPattern(_ pattern: String) throws {
+        let fileURL = getExcludeFileURL()
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: fileURL.path) else {
+            print("No exclusion patterns configured (exclude file does not exist).")
+            return
+        }
+        
+        var lines: [String] = []
+        if let content = try? String(contentsOf: fileURL, encoding: .utf8) {
+            lines = content.components(separatedBy: .newlines)
+                           .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                           .filter { !$0.isEmpty }
+        }
+        
+        let trimmed = pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            writeToStderr("[ERROR] Exclusion pattern cannot be empty.")
+            throw ExitCode(1)
+        }
+        
+        guard let index = lines.firstIndex(of: trimmed) else {
+            print("Pattern '\(trimmed)' not found in the exclusion list.")
+            return
+        }
+        
+        lines.remove(at: index)
+        let newContent = lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
+        do {
+            try newContent.write(to: fileURL, atomically: true, encoding: .utf8)
+            print("[SUCCESS] Removed pattern '\(trimmed)' from exclusions.")
+        } catch {
+            writeToStderr("[ERROR] Failed to write exclude file: \(error.localizedDescription)")
+            throw ExitCode(1)
+        }
+    }
+    
     func run() throws {
+        // Exclusion CLI Management commands check
+        if listExclude {
+            try listExclusionPatterns()
+            return
+        }
+        if let patternToAdd = addExclude {
+            try addExclusionPattern(patternToAdd)
+            return
+        }
+        if let patternToRemove = removeExclude {
+            try removeExclusionPattern(patternToRemove)
+            return
+        }
+
         // Scheduler commands check
         if let schedule = installSchedule {
             let val = schedule.lowercased()

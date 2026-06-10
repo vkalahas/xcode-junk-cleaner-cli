@@ -445,26 +445,17 @@ struct XcodeJunkCleanerTests {
         
         // Test .xcode-junk-cleaner-exclude file parsing
         let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser
-        let excludeFile = home.appendingPathComponent(".xcode-junk-cleaner-exclude")
-        
-        var originalContent: String? = nil
-        let existed = fm.fileExists(atPath: excludeFile.path)
-        if existed {
-            originalContent = try? String(contentsOf: excludeFile, encoding: .utf8)
-        }
-        
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
         defer {
-            if existed, let original = originalContent {
-                try? original.write(to: excludeFile, atomically: true, encoding: .utf8)
-            } else {
-                try? fm.removeItem(at: excludeFile)
-            }
+            try? fm.removeItem(at: tempDir)
         }
         
+        let excludeFile = tempDir.appendingPathComponent(".xcode-junk-cleaner-exclude")
         try "spmCaches\n# comment\n\nmyCustomPattern\n".write(to: excludeFile, atomically: true, encoding: .utf8)
         
-        let cleanerWithFile = try XcodeJunkCleaner.parse([])
+        var cleanerWithFile = try XcodeJunkCleaner.parse([])
+        cleanerWithFile.homeDirectoryOverride = tempDir
         let resolved = cleanerWithFile.resolvedExclusions
         #expect(resolved.contains("spmCaches"))
         #expect(resolved.contains("myCustomPattern"))
@@ -524,5 +515,50 @@ struct XcodeJunkCleanerTests {
         // Test --uninstall-schedule
         let uninstall = try XcodeJunkCleaner.parse(["--uninstall-schedule"])
         #expect(uninstall.uninstallSchedule == true)
+    }
+    
+    @Test("Test Exclusion List CLI Management")
+    func testExclusionCLICommands() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
+        defer {
+            try? fm.removeItem(at: tempDir)
+        }
+        
+        let excludeFile = tempDir.appendingPathComponent(".xcode-junk-cleaner-exclude")
+        
+        var cleaner = try XcodeJunkCleaner.parse([])
+        cleaner.homeDirectoryOverride = tempDir
+        
+        // Test list on non-existent file doesn't throw
+        try cleaner.listExclusionPatterns()
+        
+        // Test add pattern
+        try cleaner.addExclusionPattern("testPatternA")
+        #expect(fm.fileExists(atPath: excludeFile.path))
+        let content1 = try String(contentsOf: excludeFile, encoding: .utf8)
+        #expect(content1.contains("testPatternA"))
+        
+        // Test duplicate add does not duplicate
+        try cleaner.addExclusionPattern("testPatternA")
+        
+        // Test add another
+        try cleaner.addExclusionPattern("testPatternB")
+        let content2 = try String(contentsOf: excludeFile, encoding: .utf8)
+        #expect(content2.contains("testPatternA"))
+        #expect(content2.contains("testPatternB"))
+        
+        // Test list
+        try cleaner.listExclusionPatterns()
+        
+        // Test remove
+        try cleaner.removeExclusionPattern("testPatternA")
+        let content3 = try String(contentsOf: excludeFile, encoding: .utf8)
+        #expect(!content3.contains("testPatternA"))
+        #expect(content3.contains("testPatternB"))
+        
+        // Test remove non-existent
+        try cleaner.removeExclusionPattern("nonexistent")
     }
 }

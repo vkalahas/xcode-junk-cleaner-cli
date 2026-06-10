@@ -598,4 +598,43 @@ struct XcodeJunkCleanerTests {
         #expect(records[1].categories == ["archives", "spmCaches"])
         #expect(records[1].reclaimedBytes == 2048)
     }
+    
+    @Test("Test Backup Compression")
+    func testBackupCompression() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
+        
+        defer {
+            try? fm.removeItem(at: tempDir)
+        }
+        
+        let mockHome = tempDir.appendingPathComponent("home")
+        let mockBackupDir = tempDir.appendingPathComponent("backup")
+        try fm.createDirectory(at: mockHome, withIntermediateDirectories: true, attributes: nil)
+        try fm.createDirectory(at: mockBackupDir, withIntermediateDirectories: true, attributes: nil)
+        
+        // Create a fake DerivedData folder and project subfolder
+        let derivedData = mockHome.appendingPathComponent("Library/Developer/Xcode/DerivedData")
+        let projectDir = derivedData.appendingPathComponent("MyProject-abcdef")
+        try fm.createDirectory(at: projectDir, withIntermediateDirectories: true, attributes: nil)
+        
+        let fileURL = projectDir.appendingPathComponent("build.log")
+        try "fake build log contents".write(to: fileURL, atomically: true, encoding: .utf8)
+        
+        // Verify delete with backup works
+        let category = JunkCategory.derivedData
+        try category.delete(home: mockHome, backupDir: mockBackupDir)
+        
+        // Target folder should be deleted
+        #expect(!fm.fileExists(atPath: projectDir.path))
+        
+        // Backup directory should contain the zip file
+        let backupContents = try fm.contentsOfDirectory(at: mockBackupDir, includingPropertiesForKeys: nil)
+        #expect(backupContents.count == 1)
+        
+        let backupZip = backupContents[0]
+        #expect(backupZip.lastPathComponent.hasPrefix("derivedData_DerivedData_"))
+        #expect(backupZip.lastPathComponent.hasSuffix(".zip"))
+    }
 }

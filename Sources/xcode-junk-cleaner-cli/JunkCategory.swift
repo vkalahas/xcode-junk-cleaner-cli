@@ -255,8 +255,47 @@ public enum JunkCategory: String, CaseIterable {
         return totalSize
     }
     
+    private func runBackup(url: URL, category: JunkCategory, backupDir: URL) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return true }
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd_HHmmss"
+        let timestamp = formatter.string(from: Date())
+        
+        let zipName = "\(category.id)_\(url.lastPathComponent)_\(timestamp).zip"
+        let destURL = backupDir.appendingPathComponent(zipName)
+        
+        print("   [BACKUP] Archiving to \(destURL.path)... ", terminator: "")
+        fflush(stdout)
+        
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-c", "-k", "--sequesterRsrc", url.path, destURL.path]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                print("[DONE]")
+                fflush(stdout)
+                return true
+            } else {
+                print("[FAILED]")
+                fflush(stdout)
+                return false
+            }
+        } catch {
+            print("[FAILED]")
+            fflush(stdout)
+            return false
+        }
+    }
+
     /// Deletes the folder and its contents recursively.
-    public func delete(home: URL = FileManager.default.homeDirectoryForCurrentUser, olderThanDays: Int? = nil, exclusions: [String] = []) throws {
+    public func delete(home: URL = FileManager.default.homeDirectoryForCurrentUser, olderThanDays: Int? = nil, exclusions: [String] = [], backupDir: URL? = nil) throws {
         let fm = FileManager.default
         
         switch self {
@@ -273,12 +312,25 @@ public enum JunkCategory: String, CaseIterable {
             } else {
                 let targetURL = home.appendingPathComponent(relativePath)
                 guard fm.fileExists(atPath: targetURL.path) else { return }
+                if let bDir = backupDir {
+                    guard runBackup(url: targetURL, category: self, backupDir: bDir) else {
+                        throw NSError(domain: "JunkCategory", code: 1, userInfo: [NSLocalizedDescriptionKey: "Backup failed for \(targetURL.lastPathComponent)"])
+                    }
+                }
                 try fm.removeItem(at: targetURL)
             }
         } else {
             let urls = getChildren(home: home, olderThanDays: olderThanDays, exclusions: exclusions)
             for url in urls {
-                try? fm.removeItem(at: url)
+                if let bDir = backupDir {
+                    if runBackup(url: url, category: self, backupDir: bDir) {
+                        try? fm.removeItem(at: url)
+                    } else {
+                        print("   [WARNING] Skipping deletion of \(url.lastPathComponent) due to backup failure.")
+                    }
+                } else {
+                    try? fm.removeItem(at: url)
+                }
             }
         }
     }

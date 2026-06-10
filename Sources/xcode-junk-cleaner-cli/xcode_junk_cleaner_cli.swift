@@ -123,6 +123,9 @@ struct XcodeJunkCleaner: ParsableCommand {
     @Flag(name: .shortAndLong, help: "Bypass the active Xcode process check.")
     var force: Bool = false
     
+    @Option(name: .shortAndLong, help: "Create backup zip archives of directories/files under the specified folder before deletion.")
+    var backup: String?
+    
     internal var homeDirectoryOverride: URL?
     
     // Parsed target category IDs
@@ -152,6 +155,11 @@ struct XcodeJunkCleaner: ParsableCommand {
         }
         
         return list
+    }
+    
+    internal var resolvedBackupURL: URL? {
+        guard let backupPath = backup else { return nil }
+        return URL(fileURLWithPath: (backupPath as NSString).expandingTildeInPath)
     }
     
     private var isInteractiveTerminal: Bool {
@@ -521,6 +529,26 @@ struct XcodeJunkCleaner: ParsableCommand {
             }
         }
 
+        // Validate backup directory if specified
+        if let backupPath = backup {
+            let fm = FileManager.default
+            let resolvedURL = URL(fileURLWithPath: (backupPath as NSString).expandingTildeInPath)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: resolvedURL.path, isDirectory: &isDir) {
+                if !isDir.boolValue {
+                    writeToStderr("[ERROR] Backup path '\(backupPath)' exists but is not a directory.")
+                    throw ExitCode(1)
+                }
+            } else {
+                do {
+                    try fm.createDirectory(at: resolvedURL, withIntermediateDirectories: true, attributes: nil)
+                } catch {
+                    writeToStderr("[ERROR] Failed to create backup directory '\(backupPath)': \(error.localizedDescription)")
+                    throw ExitCode(1)
+                }
+            }
+        }
+
         // Banner (silenced in quiet/json modes)
         log("")
         log("Xcode Junk Cleaner CLI v1.0.0".colored(.boldCyan))
@@ -834,7 +862,7 @@ struct XcodeJunkCleaner: ParsableCommand {
         fflush(stdout)
         
         do {
-            try category.delete(olderThanDays: self.olderThan, exclusions: self.resolvedExclusions)
+            try category.delete(olderThanDays: self.olderThan, exclusions: self.resolvedExclusions, backupDir: self.resolvedBackupURL)
             if category == .unavailableSimulators {
                 log("[SUCCESS] Cleaned \(size) devices".colored(.boldGreen))
                 return (0, nil)

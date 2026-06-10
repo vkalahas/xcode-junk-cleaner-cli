@@ -637,4 +637,51 @@ struct XcodeJunkCleanerTests {
         #expect(backupZip.lastPathComponent.hasPrefix("derivedData_DerivedData_"))
         #expect(backupZip.lastPathComponent.hasSuffix(".zip"))
     }
+    
+    @Test("Test SwiftUI Preview Simulators Parsing")
+    func testPreviewSimulatorsParsing() {
+        let mockOutputZero = """
+        == Devices ==
+        -- iOS 17.2 --
+            iPhone 15 Pro (UUID) (Shutdown)
+        """
+        #expect(JunkCategory.previewSimulators.parseSimulatorsCount(from: mockOutputZero) == 1)
+        
+        let mockOutputMultiple = """
+        == Devices ==
+        -- iOS 16.0 --
+            iPhone 14 (AAAAA) (Shutdown)
+            iPhone 14 Pro (BBBBB) (Shutdown)
+        -- iOS 17.0 --
+            iPhone 15 (12345) (Shutdown)
+            iPhone 15 Pro (67890) (Booted)
+        """
+        #expect(JunkCategory.previewSimulators.parseSimulatorsCount(from: mockOutputMultiple) == 4)
+        
+        let mockOutputEmpty = ""
+        #expect(JunkCategory.previewSimulators.parseSimulatorsCount(from: mockOutputEmpty) == 0)
+    }
+    
+    @Test("Test SwiftUI Previews Cache Path and Size Scan")
+    func testSwiftUIPreviewsScan() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
+        defer {
+            try? fm.removeItem(at: tempDir)
+        }
+        
+        let mockHome = tempDir
+        let previewsCachePath = mockHome.appendingPathComponent("Library/Developer/Xcode/UserData/Previews")
+        try fm.createDirectory(at: previewsCachePath, withIntermediateDirectories: true, attributes: nil)
+        
+        let cacheFile = previewsCachePath.appendingPathComponent("preview-cache-file.bin")
+        try "fake cache data".write(to: cacheFile, atomically: true, encoding: .utf8)
+        
+        let category = JunkCategory.swiftUIPreviews
+        #expect(category.isSafe == true)
+        
+        let size = category.calculateSize(home: mockHome)
+        #expect(size == Int64("fake cache data".utf8.count))
+    }
 }

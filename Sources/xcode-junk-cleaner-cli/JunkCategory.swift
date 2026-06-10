@@ -24,6 +24,15 @@ public enum JunkCategory: String, CaseIterable {
     case transporterInstall = "Transporter Installation Cache"
     case unavailableSimulators = "Unavailable Simulators"
     
+    // Phase 2 Categories
+    case xrOSDeviceSupport = "visionOS (xrOS) DeviceSupport"
+    case visionOSDeviceSupport = "visionOS DeviceSupport"
+    case interfaceBuilderCache = "Interface Builder Cache"
+    case legacyDocSets = "Legacy DocSets"
+    case cocoaPodsRepos = "CocoaPods Master Specs Repo"
+    case transporterLogs = "Transporter Logs"
+    case xcodeDiagnosticReports = "Xcode Diagnostic Reports"
+    
     public var displayName: String {
         switch self {
         case .derivedData: return "Derived Data"
@@ -46,6 +55,13 @@ public enum JunkCategory: String, CaseIterable {
         case .transporterCache: return "Transporter Cache"
         case .transporterInstall: return "Transporter Installation Cache"
         case .unavailableSimulators: return "Unavailable Simulators"
+        case .xrOSDeviceSupport: return "visionOS (xrOS) DeviceSupport"
+        case .visionOSDeviceSupport: return "visionOS DeviceSupport"
+        case .interfaceBuilderCache: return "Interface Builder Cache"
+        case .legacyDocSets: return "Legacy DocSets"
+        case .cocoaPodsRepos: return "CocoaPods Master Specs Repo"
+        case .transporterLogs: return "Transporter Logs"
+        case .xcodeDiagnosticReports: return "Xcode Diagnostic Reports"
         }
     }
     
@@ -91,6 +107,20 @@ public enum JunkCategory: String, CaseIterable {
             return ".itmstransporter"
         case .unavailableSimulators:
             return ""
+        case .xrOSDeviceSupport:
+            return "Library/Developer/Xcode/xrOS DeviceSupport"
+        case .visionOSDeviceSupport:
+            return "Library/Developer/Xcode/visionOS DeviceSupport"
+        case .interfaceBuilderCache:
+            return "Library/Caches/com.apple.dt.InterfaceBuilder"
+        case .legacyDocSets:
+            return "Library/Developer/Shared/Documentation/DocSets"
+        case .cocoaPodsRepos:
+            return ".cocoapods/repos"
+        case .transporterLogs:
+            return "Library/Logs/com.apple.amp.itmstransporter"
+        case .xcodeDiagnosticReports:
+            return "Library/Logs/DiagnosticReports"
         }
     }
     
@@ -136,6 +166,20 @@ public enum JunkCategory: String, CaseIterable {
             return "Cached transporter engine binaries, runtime downloads, and package updates."
         case .unavailableSimulators:
             return "Simulator devices that are no longer supported by your current Xcode install."
+        case .xrOSDeviceSupport:
+            return "Debugging symbols for visionOS (xrOS) AVP devices. Safe to delete."
+        case .visionOSDeviceSupport:
+            return "Debugging symbols for Apple Vision Pro (visionOS) devices. Safe to delete."
+        case .interfaceBuilderCache:
+            return "Cached storyboard/xib rendering results and Interface Builder state."
+        case .legacyDocSets:
+            return "Legacy downloaded Xcode developer documentation sets."
+        case .cocoaPodsRepos:
+            return "Local Git clone of the CocoaPods master spec repository (can grow to several gigabytes)."
+        case .transporterLogs:
+            return "Upload log files created during App Store Connect delivery."
+        case .xcodeDiagnosticReports:
+            return "Diagnostic logs and crash reports related to Xcode, Simulator, SourceKit, or Swift compiler failures."
         }
     }
     
@@ -154,10 +198,14 @@ public enum JunkCategory: String, CaseIterable {
     }
     
     public var exists: Bool {
-        if self == .unavailableSimulators {
+        switch self {
+        case .unavailableSimulators:
             return countUnavailableSimulators() > 0
+        case .xcodeDiagnosticReports:
+            return !getDiagnosticReportURLs().isEmpty
+        default:
+            return FileManager.default.fileExists(atPath: url.path)
         }
-        return FileManager.default.fileExists(atPath: url.path)
     }
     
     /// Calculates directory size recursively in bytes.
@@ -167,6 +215,8 @@ public enum JunkCategory: String, CaseIterable {
             return calculateOrphanedDerivedDataSize()
         case .unavailableSimulators:
             return Int64(countUnavailableSimulators())
+        case .xcodeDiagnosticReports:
+            return calculateDiagnosticReportsSize()
         default:
             break
         }
@@ -221,6 +271,8 @@ public enum JunkCategory: String, CaseIterable {
             try deleteOrphanedDerivedData()
         case .unavailableSimulators:
             try deleteUnavailableSimulators()
+        case .xcodeDiagnosticReports:
+            try deleteDiagnosticReports()
         default:
             let fm = FileManager.default
             guard fm.fileExists(atPath: url.path) else { return }
@@ -336,5 +388,38 @@ public enum JunkCategory: String, CaseIterable {
         
         try process.run()
         process.waitUntilExit()
+    }
+    
+    private func getDiagnosticReportURLs() -> [URL] {
+        let fm = FileManager.default
+        let diagURL = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/DiagnosticReports")
+        guard let contents = try? fm.contentsOfDirectory(at: diagURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        
+        let prefixes = ["Xcode_", "swift-frontend_", "Simulator_", "ibtool_", "simctl_", "actool_", "lldb-rpc-server_", "swift-connection_"]
+        return contents.filter { url in
+            let filename = url.lastPathComponent
+            return prefixes.contains { prefix in filename.hasPrefix(prefix) }
+        }
+    }
+    
+    private func calculateDiagnosticReportsSize() -> Int64 {
+        let urls = getDiagnosticReportURLs()
+        var total: Int64 = 0
+        for url in urls {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+               let size = attrs[.size] as? Int64 {
+                total += size
+            }
+        }
+        return total
+    }
+    
+    private func deleteDiagnosticReports() throws {
+        let urls = getDiagnosticReportURLs()
+        for url in urls {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 }

@@ -54,14 +54,22 @@ struct XcodeJunkCleaner: ParsableCommand {
         
         // Print Summary Table
         let headerCategory = "Category".padding(toLength: 30, withPad: " ", startingAt: 0)
-        let headerPath = "Path".padding(toLength: 50, withPad: " ", startingAt: 0)
+        let headerPath = "Path / Action".padding(toLength: 50, withPad: " ", startingAt: 0)
         let headerSize = String(repeating: " ", count: 12 - "Size".count) + "Size"
         print("\(headerCategory) \(headerPath) \(headerSize)".colored(.bold))
         
         print("----------------------------------------------------------------------------------------------------")
         for (category, size) in scannedCategories where size > 0 {
-            let pathDisplay = "~/\(category.relativePath)"
-            let sizeDisplay = JunkCategory.formatBytes(size)
+            let pathDisplay: String
+            let sizeDisplay: String
+            
+            if category == .unavailableSimulators {
+                pathDisplay = "xcrun simctl delete unavailable"
+                sizeDisplay = "\(size) devices"
+            } else {
+                pathDisplay = "~/\(category.relativePath)"
+                sizeDisplay = JunkCategory.formatBytes(size)
+            }
             
             let categoryCol = category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
             let pathCol = pathDisplay.padding(toLength: 50, withPad: " ", startingAt: 0)
@@ -138,9 +146,15 @@ struct XcodeJunkCleaner: ParsableCommand {
             
             print("\n---------------------------------------------------------")
             print("📂 \(category.displayName)".colored(.boldCyan))
-            print("   Path: " + "~/\(category.relativePath)".colored(.yellow))
-            print("   Description: \(category.description)")
-            print("   Size: " + JunkCategory.formatBytes(size).colored(.boldYellow))
+            if category == .unavailableSimulators {
+                print("   Action: " + "xcrun simctl delete unavailable".colored(.yellow))
+                print("   Description: \(category.description)")
+                print("   Status: " + "\(size) unavailable devices found".colored(.boldYellow))
+            } else {
+                print("   Path: " + "~/\(category.relativePath)".colored(.yellow))
+                print("   Description: \(category.description)")
+                print("   Size: " + JunkCategory.formatBytes(size).colored(.boldYellow))
+            }
             if !category.isSafe {
                 print("   ⚠️  " + "Caution: Deleting this folder resets its state (e.g. simulator runtimes).".colored(.boldRed))
             }
@@ -173,8 +187,13 @@ struct XcodeJunkCleaner: ParsableCommand {
         
         do {
             try category.delete()
-            print("✅ Reclaimed ".colored(.green) + JunkCategory.formatBytes(size).colored(.boldGreen))
-            return size
+            if category == .unavailableSimulators {
+                print("✅ Cleaned ".colored(.green) + "\(size) devices".colored(.boldGreen))
+                return 0
+            } else {
+                print("✅ Reclaimed ".colored(.green) + JunkCategory.formatBytes(size).colored(.boldGreen))
+                return size
+            }
         } catch {
             print("❌ Failed".colored(.red))
             print("   ⚠️  Error details: \(error.localizedDescription)".colored(.boldRed))

@@ -18,6 +18,12 @@ public enum JunkCategory: String, CaseIterable {
     case playgroundTemp = "Playground Temporary Files"
     case mobileDeviceCrashLogs = "MobileDevice Crash Logs"
     
+    // Advanced/Hidden Categories
+    case orphanedDerivedData = "Orphaned Derived Data"
+    case transporterCache = "Transporter Cache"
+    case transporterInstall = "Transporter Installation Cache"
+    case unavailableSimulators = "Unavailable Simulators"
+    
     public var displayName: String {
         switch self {
         case .derivedData: return "Derived Data"
@@ -36,6 +42,10 @@ public enum JunkCategory: String, CaseIterable {
         case .simulatorLogs: return "Simulator Logs"
         case .playgroundTemp: return "Playground Temporary Files"
         case .mobileDeviceCrashLogs: return "MobileDevice Crash Logs"
+        case .orphanedDerivedData: return "Orphaned Derived Data"
+        case .transporterCache: return "Transporter Cache"
+        case .transporterInstall: return "Transporter Installation Cache"
+        case .unavailableSimulators: return "Unavailable Simulators"
         }
     }
     
@@ -73,6 +83,14 @@ public enum JunkCategory: String, CaseIterable {
             return "Library/Developer/Xcode/UserData/PlaygroundTemp"
         case .mobileDeviceCrashLogs:
             return "Library/Logs/CrashReporter/MobileDevice"
+        case .orphanedDerivedData:
+            return "Library/Developer/Xcode/DerivedData"
+        case .transporterCache:
+            return "Library/Caches/com.apple.amp.itmstransporter"
+        case .transporterInstall:
+            return ".itmstransporter"
+        case .unavailableSimulators:
+            return ""
         }
     }
     
@@ -110,6 +128,14 @@ public enum JunkCategory: String, CaseIterable {
             return "Xcode Swift Playground temporary execution cache."
         case .mobileDeviceCrashLogs:
             return "Crash reports synced from connected physical devices."
+        case .orphanedDerivedData:
+            return "Derived Data folders referencing projects or workspaces that no longer exist on your disk."
+        case .transporterCache:
+            return "Temporary files, uploads caches, and token logs created by the iTunes Transporter utility."
+        case .transporterInstall:
+            return "Cached transporter engine binaries, runtime downloads, and package updates."
+        case .unavailableSimulators:
+            return "Simulator devices that are no longer supported by your current Xcode install."
         }
     }
     
@@ -128,11 +154,23 @@ public enum JunkCategory: String, CaseIterable {
     }
     
     public var exists: Bool {
+        if self == .unavailableSimulators {
+            return countUnavailableSimulators() > 0
+        }
         return FileManager.default.fileExists(atPath: url.path)
     }
     
     /// Calculates directory size recursively in bytes.
     public func calculateSize() -> Int64 {
+        switch self {
+        case .orphanedDerivedData:
+            return calculateOrphanedDerivedDataSize()
+        case .unavailableSimulators:
+            return Int64(countUnavailableSimulators())
+        default:
+            break
+        }
+        
         let path = url.path
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else {
@@ -178,9 +216,16 @@ public enum JunkCategory: String, CaseIterable {
     
     /// Deletes the folder and its contents recursively.
     public func delete() throws {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: url.path) else { return }
-        try fm.removeItem(at: url)
+        switch self {
+        case .orphanedDerivedData:
+            try deleteOrphanedDerivedData()
+        case .unavailableSimulators:
+            try deleteUnavailableSimulators()
+        default:
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: url.path) else { return }
+            try fm.removeItem(at: url)
+        }
     }
     
     /// Helper to format bytes to human readable string
@@ -198,5 +243,98 @@ public enum JunkCategory: String, CaseIterable {
         } else {
             return "\(bytes) B"
         }
+    }
+    
+    // MARK: - Private Helpers for Advanced Cleanups
+    
+    private func getOrphanedDerivedDataURLs() -> [URL] {
+        let fm = FileManager.default
+        let derivedDataURL = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Developer/Xcode/DerivedData")
+        guard let contents = try? fm.contentsOfDirectory(at: derivedDataURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        
+        var orphanedURLs: [URL] = []
+        for folderURL in contents {
+            let plistURL = folderURL.appendingPathComponent("info.plist")
+            guard fm.fileExists(atPath: plistURL.path) else { continue }
+            
+            if let plistData = try? Data(contentsOf: plistURL),
+               let plist = try? PropertyListSerialization.propertyList(from: plistData, options: [], format: nil) as? [String: Any],
+               let workspacePath = plist["WorkspacePath"] as? String {
+                // Check if the source workspace / project file still exists on disk
+                if !fm.fileExists(atPath: workspacePath) {
+                    orphanedURLs.append(folderURL)
+                }
+            }
+        }
+        return orphanedURLs
+    }
+    
+    private func calculateOrphanedDerivedDataSize() -> Int64 {
+        let urls = getOrphanedDerivedDataURLs()
+        var total: Int64 = 0
+        let properties: [URLResourceKey] = [.fileSizeKey, .isDirectoryKey]
+        
+        for url in urls {
+            guard let enumerator = FileManager.default.enumerator(
+                at: url,
+                includingPropertiesForKeys: properties,
+                options: [.skipsHiddenFiles],
+                errorHandler: nil
+            ) else {
+                continue
+            }
+            
+            for case let fileURL as URL in enumerator {
+                if let values = try? fileURL.resourceValues(forKeys: Set(properties)),
+                   let isDirectory = values.isDirectory, !isDirectory,
+                   let fileSize = values.fileSize {
+                    total += Int64(fileSize)
+                }
+            }
+        }
+        return total
+    }
+    
+    private func deleteOrphanedDerivedData() throws {
+        let urls = getOrphanedDerivedDataURLs()
+        for url in urls {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+    
+    public func countUnavailableSimulators() -> Int {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl", "list", "devices"]
+        
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe() // Mute standard error
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let output = String(data: data, encoding: .utf8) {
+                let lines = output.components(separatedBy: .newlines)
+                let unavailableLines = lines.filter { $0.contains("(unavailable)") }
+                return unavailableLines.count
+            }
+        } catch {
+            return 0
+        }
+        return 0
+    }
+    
+    private func deleteUnavailableSimulators() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl", "delete", "unavailable"]
+        
+        try process.run()
+        process.waitUntilExit()
     }
 }

@@ -21,6 +21,7 @@ struct XcodeJunkCleanerTests {
     func testPaths() {
         let homePath = FileManager.default.homeDirectoryForCurrentUser.path
         for category in JunkCategory.allCases {
+            guard !category.relativePath.isEmpty else { continue }
             let categoryPath = category.url.path
             #expect(categoryPath.hasPrefix(homePath))
             #expect(categoryPath.contains(category.relativePath))

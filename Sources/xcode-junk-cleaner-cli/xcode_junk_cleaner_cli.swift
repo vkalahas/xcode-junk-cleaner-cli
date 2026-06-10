@@ -88,6 +88,9 @@ struct XcodeJunkCleaner: ParsableCommand {
     @Option(name: .shortAndLong, help: "Specify particular categories to scan or clean (comma-separated list of IDs, or repeat the option).")
     var category: [String] = []
     
+    @Option(name: .long, help: "Comma-separated list of category IDs or file path patterns to exclude from cleaning.")
+    var exclude: String?
+    
     @Option(name: .shortAndLong, help: "Filters directories, scanning and deleting only folders that have not been modified in the specified number of days.")
     var olderThan: Int?
     
@@ -102,6 +105,28 @@ struct XcodeJunkCleaner: ParsableCommand {
         let items = category.flatMap { $0.components(separatedBy: ",") }
                             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         return Set(items.filter { !$0.isEmpty })
+    }
+    
+    internal var resolvedExclusions: [String] {
+        var list: [String] = []
+        
+        // Load from CLI
+        if let cliExclude = exclude {
+            let items = cliExclude.components(separatedBy: ",")
+                                  .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            list.append(contentsOf: items.filter { !$0.isEmpty })
+        }
+        
+        // Load from ~/.xcode-cleaner-exclude
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let excludeFileURL = home.appendingPathComponent(".xcode-cleaner-exclude")
+        if let content = try? String(contentsOf: excludeFileURL, encoding: .utf8) {
+            let lines = content.components(separatedBy: .newlines)
+                               .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            list.append(contentsOf: lines.filter { !$0.isEmpty && !$0.hasPrefix("#") })
+        }
+        
+        return list
     }
     
     private var isInteractiveTerminal: Bool {
@@ -165,16 +190,23 @@ struct XcodeJunkCleaner: ParsableCommand {
         
         // Resolve target categories based on filtering
         let selection = selectedCategoryIds
-        let targetCategories: [JunkCategory]
+        let exclusions = resolvedExclusions
+        let initialCategories: [JunkCategory]
         if !selection.isEmpty {
             let matched = selection.compactMap { JunkCategory.from(id: $0) }
             if matched.isEmpty {
                 writeToStderr("Error: None of the specified categories matched valid IDs.")
                 throw ExitCode(1)
             }
-            targetCategories = matched
+            initialCategories = matched
         } else {
-            targetCategories = JunkCategory.allCases
+            initialCategories = JunkCategory.allCases
+        }
+        
+        let targetCategories = initialCategories.filter { category in
+            !exclusions.contains { pattern in
+                category.id.lowercased() == pattern.lowercased()
+            }
         }
         
         var scannedCategories: [(category: JunkCategory, size: Int64)] = []
@@ -184,7 +216,7 @@ struct XcodeJunkCleaner: ParsableCommand {
             log("   Analyzing \(category.displayName)... ", terminator: "")
             fflush(stdout)
             
-            let size = category.calculateSize(olderThanDays: olderThan)
+            let size = category.calculateSize(olderThanDays: olderThan, exclusions: exclusions)
             scannedCategories.append((category, size))
             totalBytes += size
             
@@ -458,7 +490,7 @@ struct XcodeJunkCleaner: ParsableCommand {
         fflush(stdout)
         
         do {
-            try category.delete(olderThanDays: self.olderThan)
+            try category.delete(olderThanDays: self.olderThan, exclusions: self.resolvedExclusions)
             if category == .unavailableSimulators {
                 log("[SUCCESS] Cleaned \(size) devices".colored(.boldGreen))
                 return (0, nil)

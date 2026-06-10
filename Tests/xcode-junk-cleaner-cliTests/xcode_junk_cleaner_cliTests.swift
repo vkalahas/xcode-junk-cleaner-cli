@@ -434,4 +434,81 @@ struct XcodeJunkCleanerTests {
         #expect(!fm.fileExists(atPath: oldFolder.path))
         #expect(fm.fileExists(atPath: newFolder.path))
     }
+    
+    @Test("Test CLI and file-based exclusion parsing")
+    func testExclusionParsing() throws {
+        // Test CLI --exclude parsing
+        let cleaner = try XcodeJunkCleaner.parse(["--exclude", "derivedData,archives"])
+        #expect(cleaner.exclude == "derivedData,archives")
+        #expect(cleaner.resolvedExclusions.contains("derivedData"))
+        #expect(cleaner.resolvedExclusions.contains("archives"))
+        
+        // Test .xcode-cleaner-exclude file parsing
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let excludeFile = home.appendingPathComponent(".xcode-cleaner-exclude")
+        
+        var originalContent: String? = nil
+        let existed = fm.fileExists(atPath: excludeFile.path)
+        if existed {
+            originalContent = try? String(contentsOf: excludeFile, encoding: .utf8)
+        }
+        
+        defer {
+            if existed, let original = originalContent {
+                try? original.write(to: excludeFile, atomically: true, encoding: .utf8)
+            } else {
+                try? fm.removeItem(at: excludeFile)
+            }
+        }
+        
+        try "spmCaches\n# comment\n\nmyCustomPattern\n".write(to: excludeFile, atomically: true, encoding: .utf8)
+        
+        let cleanerWithFile = try XcodeJunkCleaner.parse([])
+        let resolved = cleanerWithFile.resolvedExclusions
+        #expect(resolved.contains("spmCaches"))
+        #expect(resolved.contains("myCustomPattern"))
+        #expect(!resolved.contains("# comment"))
+        #expect(!resolved.contains(""))
+    }
+    
+    @Test("Test scan and delete with path-based exclusions")
+    func testScanAndDeleteWithExclusions() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
+        
+        defer {
+            try? fm.removeItem(at: tempDir)
+        }
+        
+        let mockHome = tempDir
+        let mockDerivedDataPath = mockHome.appendingPathComponent("Library/Developer/Xcode/DerivedData")
+        try fm.createDirectory(at: mockDerivedDataPath, withIntermediateDirectories: true, attributes: nil)
+        
+        // Create ProjA (to exclude)
+        let projA = mockDerivedDataPath.appendingPathComponent("ProjA-abc")
+        try fm.createDirectory(at: projA, withIntermediateDirectories: true, attributes: nil)
+        let fileA = projA.appendingPathComponent("build.log")
+        try "dataA".write(to: fileA, atomically: true, encoding: .utf8)
+        
+        // Create ProjB (to clean)
+        let projB = mockDerivedDataPath.appendingPathComponent("ProjB-def")
+        try fm.createDirectory(at: projB, withIntermediateDirectories: true, attributes: nil)
+        let fileB = projB.appendingPathComponent("build.log")
+        try "dataB".write(to: fileB, atomically: true, encoding: .utf8)
+        
+        let category = JunkCategory.derivedData
+        
+        // Calculate size with exclusion "ProjA"
+        let sizeWithExclusion = category.calculateSize(home: mockHome, exclusions: ["ProjA"])
+        #expect(sizeWithExclusion == Int64("dataB".utf8.count))
+        
+        // Delete with exclusion "ProjA"
+        try category.delete(home: mockHome, exclusions: ["ProjA"])
+        
+        // ProjA should be preserved, ProjB should be deleted
+        #expect(fm.fileExists(atPath: projA.path))
+        #expect(!fm.fileExists(atPath: projB.path))
+    }
 }

@@ -32,6 +32,8 @@ public enum JunkCategory: String, CaseIterable {
     case cocoaPodsRepos = "CocoaPods Master Specs Repo"
     case transporterLogs = "Transporter Logs"
     case xcodeDiagnosticReports = "Xcode Diagnostic Reports"
+    case swiftUIPreviews = "SwiftUI Previews Cache"
+    case previewSimulators = "SwiftUI Preview Simulators"
     
     public var displayName: String {
         switch self {
@@ -62,6 +64,8 @@ public enum JunkCategory: String, CaseIterable {
         case .cocoaPodsRepos: return "CocoaPods Master Specs Repo"
         case .transporterLogs: return "Transporter Logs"
         case .xcodeDiagnosticReports: return "Xcode Diagnostic Reports"
+        case .swiftUIPreviews: return "SwiftUI Previews Cache"
+        case .previewSimulators: return "SwiftUI Preview Simulators"
         }
     }
     
@@ -121,6 +125,10 @@ public enum JunkCategory: String, CaseIterable {
             return "Library/Logs/com.apple.amp.itmstransporter"
         case .xcodeDiagnosticReports:
             return "Library/Logs/DiagnosticReports"
+        case .swiftUIPreviews:
+            return "Library/Developer/Xcode/UserData/Previews"
+        case .previewSimulators:
+            return ""
         }
     }
     
@@ -180,6 +188,10 @@ public enum JunkCategory: String, CaseIterable {
             return "Upload log files created during App Store Connect delivery."
         case .xcodeDiagnosticReports:
             return "Diagnostic logs and crash reports related to Xcode, Simulator, SourceKit, or Swift compiler failures."
+        case .swiftUIPreviews:
+            return "SwiftUI canvas preview cache and generated assets."
+        case .previewSimulators:
+            return "Simulator devices specifically created for SwiftUI Previews."
         }
     }
     
@@ -201,6 +213,8 @@ public enum JunkCategory: String, CaseIterable {
         switch self {
         case .unavailableSimulators:
             return countUnavailableSimulators() > 0
+        case .previewSimulators:
+            return countPreviewSimulators() > 0
         case .xcodeDiagnosticReports:
             return !getDiagnosticReportURLs().isEmpty
         default:
@@ -242,6 +256,9 @@ public enum JunkCategory: String, CaseIterable {
     public func calculateSize(home: URL = FileManager.default.homeDirectoryForCurrentUser, olderThanDays: Int? = nil, exclusions: [String] = []) -> Int64 {
         if self == .unavailableSimulators {
             return Int64(countUnavailableSimulators())
+        }
+        if self == .previewSimulators {
+            return Int64(countPreviewSimulators())
         }
         
         let fm = FileManager.default
@@ -301,6 +318,9 @@ public enum JunkCategory: String, CaseIterable {
         switch self {
         case .unavailableSimulators:
             try deleteUnavailableSimulators()
+            return
+        case .previewSimulators:
+            try deletePreviewSimulators()
             return
         default:
             break
@@ -372,7 +392,7 @@ public enum JunkCategory: String, CaseIterable {
         let fm = FileManager.default
         
         var urls: [URL]
-        if self == .unavailableSimulators {
+        if self == .unavailableSimulators || self == .previewSimulators {
             urls = []
         } else if self == .orphanedDerivedData {
             urls = getOrphanedDerivedDataURLs(home: home)
@@ -484,6 +504,29 @@ public enum JunkCategory: String, CaseIterable {
         _ = runSimctl(arguments: ["erase", "all"])
     }
     
+    public func countPreviewSimulators() -> Int {
+        if let output = runSimctl(arguments: ["--set", "previews", "list", "devices"], captureOutput: true) {
+            return parseSimulatorsCount(from: output)
+        }
+        return 0
+    }
+    
+    internal func parseSimulatorsCount(from output: String) -> Int {
+        let lines = output.components(separatedBy: .newlines)
+        return lines.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.isEmpty &&
+                   !trimmed.hasPrefix("==") &&
+                   !trimmed.hasPrefix("--") &&
+                   trimmed.contains("(") &&
+                   trimmed.contains(")")
+        }.count
+    }
+    
+    private func deletePreviewSimulators() throws {
+        _ = runSimctl(arguments: ["--set", "previews", "delete", "all"])
+    }
+    
     public var id: String {
         switch self {
         case .derivedData: return "derivedData"
@@ -513,6 +556,8 @@ public enum JunkCategory: String, CaseIterable {
         case .cocoaPodsRepos: return "cocoaPodsRepos"
         case .transporterLogs: return "transporterLogs"
         case .xcodeDiagnosticReports: return "xcodeDiagnosticReports"
+        case .swiftUIPreviews: return "swiftUIPreviews"
+        case .previewSimulators: return "previewSimulators"
         }
     }
     

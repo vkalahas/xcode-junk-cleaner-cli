@@ -71,7 +71,7 @@ struct HistoricalCleanup: Codable {
 // MARK: - Main Command
 
 @main
-struct XcodeJunkCleaner: ParsableCommand {
+struct XcodeJunkCleaner: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "xcode-junk-cleaner",
         abstract: "A native Swift CLI utility to clean Xcode-related junk and reclaim disk space.",
@@ -169,6 +169,15 @@ struct XcodeJunkCleaner: ParsableCommand {
     private func isXcodeRunning() -> Bool {
         #if os(macOS)
         let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dt.Xcode")
+        return !apps.isEmpty
+        #else
+        return false
+        #endif
+    }
+    
+    private func isSimulatorRunning() -> Bool {
+        #if os(macOS)
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.iphonesimulator")
         return !apps.isEmpty
         #else
         return false
@@ -483,7 +492,7 @@ struct XcodeJunkCleaner: ParsableCommand {
         }
     }
     
-    func run() throws {
+    func run() async throws {
         // Exclusion CLI Management commands check
         if listExclude {
             try listExclusionPatterns()
@@ -514,17 +523,20 @@ struct XcodeJunkCleaner: ParsableCommand {
             return
         }
 
-        // Xcode process check
-        if isXcodeRunning() && !force {
+        // Xcode and Simulator process check
+        let xcodeRunning = isXcodeRunning()
+        let simulatorRunning = isSimulatorRunning()
+        if (xcodeRunning || simulatorRunning) && !force {
+            let appNames = [xcodeRunning ? "Xcode" : nil, simulatorRunning ? "Simulator" : nil].compactMap { $0 }.joined(separator: " and ")
             if isInteractiveTerminal && !json && !quiet {
-                print("[WARNING] Xcode is currently running. Cleaning cache files while Xcode is running may cause instability or build failures.".colored(.boldYellow))
+                print("[WARNING] \(appNames) currently running. Cleaning cache files while they are running may cause instability, build failures, or state corruption.".colored(.boldYellow))
                 let answer = prompt(message: "Do you want to continue anyway? (y/n)", defaultOption: "n")
                 if answer != "y" && answer != "yes" {
-                    log("[INFO] Aborted by user because Xcode is running.")
+                    log("[INFO] Aborted by user because active application(s) are running.")
                     throw ExitCode(4)
                 }
             } else {
-                writeToStderr("[ERROR] Xcode is currently running. Close Xcode or use --force (-f) to bypass this check.")
+                writeToStderr("[ERROR] \(appNames) currently running. Close active application(s) or use --force (-f) to bypass this check.")
                 throw ExitCode(4)
             }
         }

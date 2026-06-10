@@ -226,7 +226,7 @@ struct XcodeJunkCleanerTests {
             error: nil
         )
         
-        let deletionResult = DeletionResult(totalReclaimedBytes: 1048576, deletedCategories: [deletionDetail])
+        let deletionResult = DeletionResult(totalReclaimedBytes: 1048576, deletedCategories: [deletionDetail], totalReclaimedSinceInstallBytes: 2097152)
         let deletionData = try encoder.encode(deletionResult)
         let decodedDeletion = try decoder.decode(DeletionResult.self, from: deletionData)
         
@@ -236,6 +236,7 @@ struct XcodeJunkCleanerTests {
         #expect(decodedDeletion.deletedCategories.first?.reclaimedBytes == 1048576)
         #expect(decodedDeletion.deletedCategories.first?.status == "success")
         #expect(decodedDeletion.deletedCategories.first?.error == nil)
+        #expect(decodedDeletion.totalReclaimedSinceInstallBytes == 2097152)
     }
 
     @Test("Test simctl Output Parsing")
@@ -560,5 +561,41 @@ struct XcodeJunkCleanerTests {
         
         // Test remove non-existent
         try cleaner.removeExclusionPattern("nonexistent")
+    }
+    
+    @Test("Test History Logs & Stats")
+    func testHistoryLogsAndStats() throws {
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true, attributes: nil)
+        defer {
+            try? fm.removeItem(at: tempDir)
+        }
+        
+        var cleaner = try XcodeJunkCleaner.parse([])
+        cleaner.homeDirectoryOverride = tempDir
+        
+        // Assert initial total is 0
+        #expect(cleaner.getHistoricalTotalReclaimedBytes() == 0)
+        
+        // Log one cleanup run
+        cleaner.appendHistoricalCleanup(categories: ["derivedData"], reclaimedBytes: 1024)
+        #expect(cleaner.getHistoricalTotalReclaimedBytes() == 1024)
+        
+        // Log another cleanup run
+        cleaner.appendHistoricalCleanup(categories: ["archives", "spmCaches"], reclaimedBytes: 2048)
+        #expect(cleaner.getHistoricalTotalReclaimedBytes() == 3072)
+        
+        // Verify JSON file got created and is valid
+        let historyFile = tempDir.appendingPathComponent(".xcode-junk-cleaner-history.json")
+        #expect(fm.fileExists(atPath: historyFile.path))
+        
+        let data = try Data(contentsOf: historyFile)
+        let records = try JSONDecoder().decode([HistoricalCleanup].self, from: data)
+        #expect(records.count == 2)
+        #expect(records[0].categories == ["derivedData"])
+        #expect(records[0].reclaimedBytes == 1024)
+        #expect(records[1].categories == ["archives", "spmCaches"])
+        #expect(records[1].reclaimedBytes == 2048)
     }
 }

@@ -53,11 +53,19 @@ struct DeletionDetail: Codable {
 struct DeletionResult: Codable {
     let totalReclaimedBytes: Int64
     let deletedCategories: [DeletionDetail]
+    let totalReclaimedSinceInstallBytes: Int64
     
     enum CodingKeys: String, CodingKey {
         case totalReclaimedBytes = "total_reclaimed_bytes"
         case deletedCategories = "deleted_categories"
+        case totalReclaimedSinceInstallBytes = "total_reclaimed_since_install_bytes"
     }
+}
+
+struct HistoricalCleanup: Codable {
+    let date: Date
+    let categories: [String]
+    let reclaimedBytes: Int64
 }
 
 // MARK: - Main Command
@@ -433,6 +441,40 @@ struct XcodeJunkCleaner: ParsableCommand {
         }
     }
     
+    internal func getHistoryFileURL() -> URL {
+        let home = homeDirectoryOverride ?? FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".xcode-junk-cleaner-history.json")
+    }
+    
+    internal func getHistoricalTotalReclaimedBytes() -> Int64 {
+        let fileURL = getHistoryFileURL()
+        guard let data = try? Data(contentsOf: fileURL),
+              let history = try? JSONDecoder().decode([HistoricalCleanup].self, from: data) else {
+            return 0
+        }
+        return history.reduce(0) { $0 + $1.reclaimedBytes }
+    }
+    
+    internal func appendHistoricalCleanup(categories: [String], reclaimedBytes: Int64) {
+        let fileURL = getHistoryFileURL()
+        let fm = FileManager.default
+        var history: [HistoricalCleanup] = []
+        if fm.fileExists(atPath: fileURL.path),
+           let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode([HistoricalCleanup].self, from: data) {
+            history = decoded
+        }
+        
+        let newRecord = HistoricalCleanup(date: Date(), categories: categories, reclaimedBytes: reclaimedBytes)
+        history.append(newRecord)
+        
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted]
+        if let data = try? encoder.encode(history) {
+            try? data.write(to: fileURL)
+        }
+    }
+    
     func run() throws {
         // Exclusion CLI Management commands check
         if listExclude {
@@ -671,11 +713,23 @@ struct XcodeJunkCleaner: ParsableCommand {
             }
         }
         
+        if totalReclaimed > 0 {
+            let deletedIds = details.filter { $0.reclaimedBytes > 0 }.map { $0.id }
+            appendHistoricalCleanup(categories: deletedIds, reclaimedBytes: totalReclaimed)
+        }
+        
+        let historicalTotal = getHistoricalTotalReclaimedBytes()
+        
         if json {
-            outputJson(DeletionResult(totalReclaimedBytes: totalReclaimed, deletedCategories: details))
+            outputJson(DeletionResult(
+                totalReclaimedBytes: totalReclaimed,
+                deletedCategories: details,
+                totalReclaimedSinceInstallBytes: historicalTotal
+            ))
         } else {
             log("=========================================================".colored(.cyan))
             log("Done! Reclaimed a total of ".colored(.boldGreen) + JunkCategory.formatBytes(totalReclaimed).colored(.boldGreen))
+            log("Total space reclaimed since install: ".colored(.boldGreen) + JunkCategory.formatBytes(historicalTotal).colored(.boldGreen))
             log("")
         }
     }
@@ -762,8 +816,16 @@ struct XcodeJunkCleaner: ParsableCommand {
             }
         }
         
+        if totalReclaimed > 0 {
+            let deletedIds = details.filter { $0.reclaimedBytes > 0 }.map { $0.id }
+            appendHistoricalCleanup(categories: deletedIds, reclaimedBytes: totalReclaimed)
+        }
+        
+        let historicalTotal = getHistoricalTotalReclaimedBytes()
+        
         log("\n" + "=========================================================".colored(.cyan))
         log("Interactive run finished! Total reclaimed: ".colored(.boldGreen) + JunkCategory.formatBytes(totalReclaimed).colored(.boldGreen))
+        log("Total space reclaimed since install: ".colored(.boldGreen) + JunkCategory.formatBytes(historicalTotal).colored(.boldGreen))
         log("")
     }
     

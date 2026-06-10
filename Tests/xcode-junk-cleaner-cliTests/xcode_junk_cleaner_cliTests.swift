@@ -443,10 +443,10 @@ struct XcodeJunkCleanerTests {
         #expect(cleaner.resolvedExclusions.contains("derivedData"))
         #expect(cleaner.resolvedExclusions.contains("archives"))
         
-        // Test .xcode-cleaner-exclude file parsing
+        // Test .xcode-junk-cleaner-exclude file parsing
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
-        let excludeFile = home.appendingPathComponent(".xcode-cleaner-exclude")
+        let excludeFile = home.appendingPathComponent(".xcode-junk-cleaner-exclude")
         
         var originalContent: String? = nil
         let existed = fm.fileExists(atPath: excludeFile.path)

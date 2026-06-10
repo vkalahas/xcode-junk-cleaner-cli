@@ -65,7 +65,7 @@ struct DeletionResult: Codable {
 @main
 struct XcodeJunkCleaner: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "xcode-cleaner",
+        commandName: "xcode-junk-cleaner",
         abstract: "A native Swift CLI utility to clean Xcode-related junk and reclaim disk space.",
         version: "1.0.0"
     )
@@ -123,9 +123,9 @@ struct XcodeJunkCleaner: ParsableCommand {
             list.append(contentsOf: items.filter { !$0.isEmpty })
         }
         
-        // Load from ~/.xcode-cleaner-exclude
+        // Load from ~/.xcode-junk-cleaner-exclude
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let excludeFileURL = home.appendingPathComponent(".xcode-cleaner-exclude")
+        let excludeFileURL = home.appendingPathComponent(".xcode-junk-cleaner-exclude")
         if let content = try? String(contentsOf: excludeFileURL, encoding: .utf8) {
             let lines = content.components(separatedBy: .newlines)
                                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -179,8 +179,8 @@ struct XcodeJunkCleaner: ParsableCommand {
         #else
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
-        let appSupport = home.appendingPathComponent("Library/Application Support/xcode-cleaner")
-        let targetExecutable = appSupport.appendingPathComponent("xcode-cleaner")
+        let appSupport = home.appendingPathComponent("Library/Application Support/xcode-junk-cleaner")
+        let targetExecutable = appSupport.appendingPathComponent("xcode-junk-cleaner")
         
         try fm.createDirectory(at: appSupport, withIntermediateDirectories: true, attributes: nil)
         
@@ -195,7 +195,7 @@ struct XcodeJunkCleaner: ParsableCommand {
             throw ExitCode(1)
         }
         
-        let label = "com.vkalahas.xcode-cleaner"
+        let label = "com.vkalahas.xcode-junk-cleaner"
         let plistURL = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
         
         var calendarIntervalPlist = ""
@@ -301,8 +301,8 @@ struct XcodeJunkCleaner: ParsableCommand {
         #else
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
-        let appSupport = home.appendingPathComponent("Library/Application Support/xcode-cleaner")
-        let label = "com.vkalahas.xcode-cleaner"
+        let appSupport = home.appendingPathComponent("Library/Application Support/xcode-junk-cleaner")
+        let label = "com.vkalahas.xcode-junk-cleaner"
         let plistURL = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
         
         let uid = getuid()

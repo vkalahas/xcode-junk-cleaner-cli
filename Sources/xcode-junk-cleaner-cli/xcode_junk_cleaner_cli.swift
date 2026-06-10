@@ -71,6 +71,7 @@ struct HistoricalCleanup: Codable {
 final class ScanStateManager: @unchecked Sendable {
     private let lock = NSLock()
     private var states: [CategoryState] = []
+    private var hasPrinted = false
     
     struct CategoryState {
         let category: JunkCategory
@@ -104,6 +105,18 @@ final class ScanStateManager: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return states
+    }
+    
+    func setHasPrinted() {
+        lock.lock()
+        defer { lock.unlock() }
+        hasPrinted = true
+    }
+    
+    var didPrint: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasPrinted
     }
     
     var completedCount: Int {
@@ -660,25 +673,21 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         let stateManager = ScanStateManager(categories: targetCategories)
         let isSpinnerEnabled = isInteractiveTerminal && !json && !quiet
         
-        if isSpinnerEnabled {
-            for state in stateManager.getSnapshot() {
-                let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
-                let bar = animatedProgressBar(step: 0).colored(.cyan)
-                print("   Analyzing \(categoryName)... \(bar) \("Analyzing...".colored(.white))")
-            }
-            fflush(stdout)
-        }
-        
         var spinnerTask: Task<Void, Never>? = nil
         if isSpinnerEnabled {
             spinnerTask = Task {
                 let n = targetCategories.count
+                var isFirstFrame = true
                 while !Task.isCancelled {
                     stateManager.incrementAnimation()
                     let snapshot = stateManager.getSnapshot()
                     
-                    // Move cursor up n lines
-                    print("\u{001B}[\(n)A", terminator: "")
+                    var output = ""
+                    if !isFirstFrame {
+                        output += "\u{001B}[\(n)A"
+                    } else {
+                        isFirstFrame = false
+                    }
                     
                     for state in snapshot {
                         let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
@@ -696,9 +705,13 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
                             bar = animatedProgressBar(step: state.animationStep).colored(.cyan)
                             statusText = "Analyzing...".colored(.white)
                         }
-                        print("\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)")
+                        output += "\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)\n"
                     }
+                    
+                    print(output, terminator: "")
                     fflush(stdout)
+                    stateManager.setHasPrinted()
+                    
                     try? await Task.sleep(nanoseconds: 80_000_000)
                 }
             }
@@ -725,10 +738,15 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
             spinnerTask.cancel()
             _ = await spinnerTask.result
             
-            // Draw one final static frame representing 100% completion
+            let didPrint = stateManager.didPrint
             let snapshot = stateManager.getSnapshot()
             let n = targetCategories.count
-            print("\u{001B}[\(n)A", terminator: "")
+            
+            var output = ""
+            if didPrint {
+                output += "\u{001B}[\(n)A"
+            }
+            
             for state in snapshot {
                 let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
                 let bar: String
@@ -745,8 +763,9 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
                     bar = ("[" + String(repeating: "█", count: 20) + "]").colored(.green)
                     statusText = "0 B (Clean)".colored(.green)
                 }
-                print("\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)")
+                output += "\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)\n"
             }
+            print(output, terminator: "")
             fflush(stdout)
         }
         

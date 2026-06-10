@@ -68,16 +68,54 @@ struct HistoricalCleanup: Codable {
     let reclaimedBytes: Int64
 }
 
-actor ScanProgress {
-    private(set) var completedCount = 0
-    let totalCount: Int
+final class ScanStateManager: @unchecked Sendable {
+    private let lock = NSLock()
+    private var states: [CategoryState] = []
     
-    init(totalCount: Int) {
-        self.totalCount = totalCount
+    struct CategoryState {
+        let category: JunkCategory
+        var size: Int64?
+        var animationStep: Int
     }
     
-    func increment() {
-        completedCount += 1
+    init(categories: [JunkCategory]) {
+        self.states = categories.map { CategoryState(category: $0, size: nil, animationStep: 0) }
+    }
+    
+    func updateSize(for category: JunkCategory, size: Int64) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let index = states.firstIndex(where: { $0.category == category }) {
+            states[index].size = size
+        }
+    }
+    
+    func incrementAnimation() {
+        lock.lock()
+        defer { lock.unlock() }
+        for i in 0..<states.count {
+            if states[i].size == nil {
+                states[i].animationStep += 1
+            }
+        }
+    }
+    
+    func getSnapshot() -> [CategoryState] {
+        lock.lock()
+        defer { lock.unlock() }
+        return states
+    }
+    
+    var completedCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return states.filter { $0.size != nil }.count
+    }
+    
+    var totalCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return states.count
     }
 }
 
@@ -196,15 +234,20 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         return false
         #endif
     }
-    
-    private func progressBar(completed: Int, total: Int, width: Int = 20) -> String {
-        guard total > 0 else { return "" }
-        let fraction = Double(completed) / Double(total)
-        let filledLength = Int(Double(width) * fraction)
-        let emptyLength = width - filledLength
-        let filledPart = String(repeating: "█", count: filledLength)
-        let emptyPart = String(repeating: "░", count: emptyLength)
-        return "[\(filledPart)\(emptyPart)]"
+    private func animatedProgressBar(step: Int, width: Int = 20) -> String {
+        let blockWidth = 3
+        let maxPos = width - blockWidth
+        guard maxPos > 0 else { return "[\(String(repeating: "░", count: width))]" }
+        
+        let cycle = maxPos * 2
+        let posInCycle = step % cycle
+        let position = posInCycle < maxPos ? posInCycle : (cycle - posInCycle)
+        
+        var chars = Array(repeating: "░", count: width)
+        for i in 0..<blockWidth {
+            chars[position + i] = "█"
+        }
+        return "[\(chars.joined())]"
     }
     
     internal func parseSizeThreshold(_ sizeStr: String) -> Int64? {
@@ -614,21 +657,48 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         var scannedCategories: [(category: JunkCategory, size: Int64)] = []
         var totalBytes: Int64 = 0
         
-        let progress = ScanProgress(totalCount: targetCategories.count)
+        let stateManager = ScanStateManager(categories: targetCategories)
         let isSpinnerEnabled = isInteractiveTerminal && !json && !quiet
+        
+        if isSpinnerEnabled {
+            for state in stateManager.getSnapshot() {
+                let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
+                let bar = animatedProgressBar(step: 0).colored(.cyan)
+                print("   Analyzing \(categoryName)... \(bar) \("Analyzing...".colored(.white))")
+            }
+            fflush(stdout)
+        }
         
         var spinnerTask: Task<Void, Never>? = nil
         if isSpinnerEnabled {
             spinnerTask = Task {
-                let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-                var frameIndex = 0
+                let n = targetCategories.count
                 while !Task.isCancelled {
-                    let completed = await progress.completedCount
-                    let total = progress.totalCount
-                    let bar = progressBar(completed: completed, total: total)
-                    print("\r   \(frames[frameIndex]) Scanning Xcode junk folders... \(bar) (\(completed)/\(total))".colored(.cyan), terminator: "")
+                    stateManager.incrementAnimation()
+                    let snapshot = stateManager.getSnapshot()
+                    
+                    // Move cursor up n lines
+                    print("\u{001B}[\(n)A", terminator: "")
+                    
+                    for state in snapshot {
+                        let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
+                        let bar: String
+                        let statusText: String
+                        if let size = state.size {
+                            bar = ("[" + String(repeating: "█", count: 20) + "]").colored(.green)
+                            let sizeStr = (state.category == .unavailableSimulators || state.category == .previewSimulators) ? "\(size) devices" : JunkCategory.formatBytes(size)
+                            if size > 0 {
+                                statusText = sizeStr.colored(.boldYellow)
+                            } else {
+                                statusText = "0 B (Clean)".colored(.green)
+                            }
+                        } else {
+                            bar = animatedProgressBar(step: state.animationStep).colored(.cyan)
+                            statusText = "Analyzing...".colored(.white)
+                        }
+                        print("\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)")
+                    }
                     fflush(stdout)
-                    frameIndex = (frameIndex + 1) % frames.count
                     try? await Task.sleep(nanoseconds: 80_000_000)
                 }
             }
@@ -639,7 +709,7 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
             for (index, category) in targetCategoriesWithIndices {
                 group.addTask {
                     let size = category.calculateSize(olderThanDays: olderThan, exclusions: exclusions)
-                    await progress.increment()
+                    stateManager.updateSize(for: category, size: size)
                     return (index, category, size)
                 }
             }
@@ -654,13 +724,43 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
         if let spinnerTask = spinnerTask {
             spinnerTask.cancel()
             _ = await spinnerTask.result
-            // Clear spinner line
-            print("\r                                                                                         \r", terminator: "")
+            
+            // Draw one final static frame representing 100% completion
+            let snapshot = stateManager.getSnapshot()
+            let n = targetCategories.count
+            print("\u{001B}[\(n)A", terminator: "")
+            for state in snapshot {
+                let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
+                let bar: String
+                let statusText: String
+                if let size = state.size {
+                    bar = ("[" + String(repeating: "█", count: 20) + "]").colored(.green)
+                    let sizeStr = (state.category == .unavailableSimulators || state.category == .previewSimulators) ? "\(size) devices" : JunkCategory.formatBytes(size)
+                    if size > 0 {
+                        statusText = sizeStr.colored(.boldYellow)
+                    } else {
+                        statusText = "0 B (Clean)".colored(.green)
+                    }
+                } else {
+                    bar = ("[" + String(repeating: "█", count: 20) + "]").colored(.green)
+                    statusText = "0 B (Clean)".colored(.green)
+                }
+                print("\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)")
+            }
             fflush(stdout)
         }
         
         scannedCategories = resultsWithIndices.map { ($0.1, $0.2) }
         totalBytes = scannedCategories.reduce(0) { $0 + $1.1 }
+        
+        // Non-spinner fallback text logs for file redirection
+        if !isSpinnerEnabled && !quiet && !json {
+            for (category, size) in scannedCategories {
+                let sizeStr = (category == .unavailableSimulators || category == .previewSimulators) ? "\(size) devices" : JunkCategory.formatBytes(size)
+                let displaySize = size > 0 ? sizeStr.colored(.boldYellow) : "0 B (Clean)".colored(.green)
+                print("   Analyzing \(category.displayName)... \(displaySize)")
+            }
+        }
         
         log("=========================================================".colored(.cyan))
         

@@ -91,6 +91,12 @@ struct XcodeJunkCleaner: ParsableCommand {
     @Option(name: .long, help: "Comma-separated list of category IDs or file path patterns to exclude from cleaning.")
     var exclude: String?
     
+    @Option(name: .long, help: "Install a LaunchAgent plist to run the cleaner periodically (daily, weekly, monthly).")
+    var installSchedule: String?
+    
+    @Flag(name: .long, help: "Uninstall the LaunchAgent plist schedule.")
+    var uninstallSchedule: Bool = false
+    
     @Option(name: .shortAndLong, help: "Filters directories, scanning and deleting only folders that have not been modified in the specified number of days.")
     var olderThan: Int?
     
@@ -166,7 +172,190 @@ struct XcodeJunkCleaner: ParsableCommand {
         }
     }
     
+    private func installScheduler(interval: String) throws {
+        #if !os(macOS)
+        writeToStderr("[ERROR] LaunchAgent scheduling is only supported on macOS.")
+        throw ExitCode(1)
+        #else
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let appSupport = home.appendingPathComponent("Library/Application Support/xcode-cleaner")
+        let targetExecutable = appSupport.appendingPathComponent("xcode-cleaner")
+        
+        try fm.createDirectory(at: appSupport, withIntermediateDirectories: true, attributes: nil)
+        
+        let currentExecutablePath = CommandLine.arguments[0]
+        if fm.fileExists(atPath: targetExecutable.path) {
+            try? fm.removeItem(at: targetExecutable)
+        }
+        do {
+            try fm.copyItem(atPath: currentExecutablePath, toPath: targetExecutable.path)
+        } catch {
+            writeToStderr("[ERROR] Failed to copy executable to '\(targetExecutable.path)': \(error.localizedDescription)")
+            throw ExitCode(1)
+        }
+        
+        let label = "com.vkalahas.xcode-cleaner"
+        let plistURL = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+        
+        var calendarIntervalPlist = ""
+        if interval == "daily" {
+            calendarIntervalPlist = """
+                    <key>Hour</key>
+                    <integer>10</integer>
+                    <key>Minute</key>
+                    <integer>0</integer>
+            """
+        } else if interval == "weekly" {
+            calendarIntervalPlist = """
+                    <key>Hour</key>
+                    <integer>10</integer>
+                    <key>Minute</key>
+                    <integer>0</integer>
+                    <key>Weekday</key>
+                    <integer>1</integer>
+            """
+        } else if interval == "monthly" {
+            calendarIntervalPlist = """
+                    <key>Day</key>
+                    <integer>1</integer>
+                    <key>Hour</key>
+                    <integer>10</integer>
+                    <key>Minute</key>
+                    <integer>0</integer>
+            """
+        }
+        
+        let plistContent = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>Label</key>
+            <string>\(label)</string>
+            <key>ProgramArguments</key>
+            <array>
+                <string>\(targetExecutable.path)</string>
+                <string>--safe</string>
+                <string>--quiet</string>
+            </array>
+            <key>StartCalendarInterval</key>
+            <dict>
+        \(calendarIntervalPlist)
+            </dict>
+        </dict>
+        </plist>
+        """
+        
+        let launchAgentsDir = home.appendingPathComponent("Library/LaunchAgents")
+        try fm.createDirectory(at: launchAgentsDir, withIntermediateDirectories: true, attributes: nil)
+        
+        do {
+            try plistContent.write(to: plistURL, atomically: true, encoding: .utf8)
+        } catch {
+            writeToStderr("[ERROR] Failed to write LaunchAgent plist: \(error.localizedDescription)")
+            throw ExitCode(1)
+        }
+        
+        let uid = getuid()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["bootstrap", "gui/\(uid)", plistURL.path]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        
+        let unloadProcess = Process()
+        unloadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        unloadProcess.arguments = ["bootout", "gui/\(uid)", plistURL.path]
+        unloadProcess.standardOutput = Pipe()
+        unloadProcess.standardError = Pipe()
+        try? unloadProcess.run()
+        unloadProcess.waitUntilExit()
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus != 0 {
+                let loadProcess = Process()
+                loadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                loadProcess.arguments = ["load", plistURL.path]
+                loadProcess.standardOutput = Pipe()
+                loadProcess.standardError = Pipe()
+                try loadProcess.run()
+                loadProcess.waitUntilExit()
+            }
+        } catch {
+            // Ignore error
+        }
+        
+        print("[SUCCESS] Scheduled background cleaning task successfully (\(interval)).")
+        print("   Binary installed to: \(targetExecutable.path)")
+        print("   LaunchAgent plist created at: \(plistURL.path)")
+        #endif
+    }
+    
+    private func uninstallScheduler() throws {
+        #if !os(macOS)
+        writeToStderr("[ERROR] LaunchAgent scheduling is only supported on macOS.")
+        throw ExitCode(1)
+        #else
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let appSupport = home.appendingPathComponent("Library/Application Support/xcode-cleaner")
+        let label = "com.vkalahas.xcode-cleaner"
+        let plistURL = home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+        
+        let uid = getuid()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["bootout", "gui/\(uid)", plistURL.path]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus != 0 {
+                let unloadProcess = Process()
+                unloadProcess.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+                unloadProcess.arguments = ["unload", plistURL.path]
+                unloadProcess.standardOutput = Pipe()
+                unloadProcess.standardError = Pipe()
+                try unloadProcess.run()
+                unloadProcess.waitUntilExit()
+            }
+        } catch {
+            // Ignore error
+        }
+        
+        if fm.fileExists(atPath: plistURL.path) {
+            try? fm.removeItem(at: plistURL)
+        }
+        if fm.fileExists(atPath: appSupport.path) {
+            try? fm.removeItem(at: appSupport)
+        }
+        
+        print("[SUCCESS] Unscheduled background cleaning task successfully and removed installed binaries.")
+        #endif
+    }
+    
     func run() throws {
+        // Scheduler commands check
+        if let schedule = installSchedule {
+            let val = schedule.lowercased()
+            guard val == "daily" || val == "weekly" || val == "monthly" else {
+                writeToStderr("[ERROR] Invalid schedule interval: '\(schedule)'. Choose from: daily, weekly, monthly.")
+                throw ExitCode(1)
+            }
+            try installScheduler(interval: val)
+            return
+        }
+        
+        if uninstallSchedule {
+            try uninstallScheduler()
+            return
+        }
+
         // Xcode process check
         if isXcodeRunning() && !force {
             if isInteractiveTerminal && !json && !quiet {

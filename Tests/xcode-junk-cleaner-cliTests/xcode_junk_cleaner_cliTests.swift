@@ -511,4 +511,18 @@ struct XcodeJunkCleanerTests {
         #expect(fm.fileExists(atPath: projA.path))
         #expect(!fm.fileExists(atPath: projB.path))
     }
+    
+    @Test("Test scheduler CLI options parsing")
+    func testSchedulerCLIOptionsParsing() throws {
+        // Test --install-schedule
+        let installDaily = try XcodeJunkCleaner.parse(["--install-schedule", "daily"])
+        #expect(installDaily.installSchedule == "daily")
+        
+        let installWeekly = try XcodeJunkCleaner.parse(["--install-schedule", "weekly"])
+        #expect(installWeekly.installSchedule == "weekly")
+        
+        // Test --uninstall-schedule
+        let uninstall = try XcodeJunkCleaner.parse(["--uninstall-schedule"])
+        #expect(uninstall.uninstallSchedule == true)
+    }
 }

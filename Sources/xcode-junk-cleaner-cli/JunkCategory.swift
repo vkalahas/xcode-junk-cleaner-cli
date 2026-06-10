@@ -299,9 +299,11 @@ public enum JunkCategory: String, CaseIterable {
     
     // MARK: - Private Helpers for Advanced Cleanups
     
-    private func getOrphanedDerivedDataURLs() -> [URL] {
+    // MARK: - Private / Internal Helpers for Advanced Cleanups
+    
+    internal func getOrphanedDerivedDataURLs(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
         let fm = FileManager.default
-        let derivedDataURL = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Developer/Xcode/DerivedData")
+        let derivedDataURL = home.appendingPathComponent("Library/Developer/Xcode/DerivedData")
         guard let contents = try? fm.contentsOfDirectory(at: derivedDataURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
             return []
         }
@@ -323,8 +325,8 @@ public enum JunkCategory: String, CaseIterable {
         return orphanedURLs
     }
     
-    private func calculateOrphanedDerivedDataSize() -> Int64 {
-        let urls = getOrphanedDerivedDataURLs()
+    internal func calculateOrphanedDerivedDataSize(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Int64 {
+        let urls = getOrphanedDerivedDataURLs(home: home)
         var total: Int64 = 0
         let properties: [URLResourceKey] = [.fileSizeKey, .isDirectoryKey]
         
@@ -349,8 +351,8 @@ public enum JunkCategory: String, CaseIterable {
         return total
     }
     
-    private func deleteOrphanedDerivedData() throws {
-        let urls = getOrphanedDerivedDataURLs()
+    internal func deleteOrphanedDerivedData(home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+        let urls = getOrphanedDerivedDataURLs(home: home)
         for url in urls {
             try FileManager.default.removeItem(at: url)
         }
@@ -390,9 +392,9 @@ public enum JunkCategory: String, CaseIterable {
         process.waitUntilExit()
     }
     
-    private func getDiagnosticReportURLs() -> [URL] {
+    internal func getDiagnosticReportURLs(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
         let fm = FileManager.default
-        let diagURL = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/DiagnosticReports")
+        let diagURL = home.appendingPathComponent("Library/Logs/DiagnosticReports")
         guard let contents = try? fm.contentsOfDirectory(at: diagURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
             return []
         }
@@ -404,8 +406,8 @@ public enum JunkCategory: String, CaseIterable {
         }
     }
     
-    private func calculateDiagnosticReportsSize() -> Int64 {
-        let urls = getDiagnosticReportURLs()
+    internal func calculateDiagnosticReportsSize(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Int64 {
+        let urls = getDiagnosticReportURLs(home: home)
         var total: Int64 = 0
         for url in urls {
             if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
@@ -416,8 +418,8 @@ public enum JunkCategory: String, CaseIterable {
         return total
     }
     
-    private func deleteDiagnosticReports() throws {
-        let urls = getDiagnosticReportURLs()
+    internal func deleteDiagnosticReports(home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
+        let urls = getDiagnosticReportURLs(home: home)
         for url in urls {
             try? FileManager.default.removeItem(at: url)
         }

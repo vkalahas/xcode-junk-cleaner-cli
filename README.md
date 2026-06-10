@@ -45,6 +45,9 @@ swift run xcode-junk-cleaner-cli
 * `-s, --safe`: Automatically clean only 100% safe directories (Group A) without prompts.
 * `-y, --yes`: Automatically clean all directories (Group A and Group B) without prompts.
 * `-d, --dry-run`: Scan files and output sizes, but do not delete any directories.
+* `--json`: Output results in structured JSON format.
+* `-q, --quiet`: Silence all standard logging output.
+* `-c, --category <id>`: Target a specific category to scan or clean (comma-separated list of IDs, or repeat the option).
 * `-h, --help`: Show help information.
 
 Example for automated safe cleaning:
@@ -56,3 +59,30 @@ Example for a dry run preview:
 ```bash
 swift run xcode-junk-cleaner-cli --dry-run
 ```
+
+## Agent and Automation Integration
+
+The CLI is designed for integration into scripts and AI coding agents (such as Claude Code, Codex, or OpenClaw).
+
+### Automatic Non-Interactive Fallback
+The tool automatically checks if standard input is a terminal (TTY). If standard input is redirected or piped, the tool disables interactive prompts. In this mode:
+* The tool will only scan and output status unless `--safe` or `--yes` is explicitly provided.
+* If deletions are requested without safe/yes flags, the tool exits with exit code 2.
+
+### Structured Outputs
+Using the `--json` flag formats both scan results and deletion logs into pretty-printed JSON, silencing standard human-readable logging.
+
+Example JSON scan command:
+```bash
+swift run xcode-junk-cleaner-cli --dry-run --json
+```
+
+Example JSON clean command targeting a specific folder:
+```bash
+swift run xcode-junk-cleaner-cli --safe --json -c spmCaches
+```
+
+### Exit Codes
+* `0`: Success (action completed or system clean).
+* `1`: General error or invalid arguments.
+* `2`: Non-interactive safety violation (trying to delete without explicit automated flags).

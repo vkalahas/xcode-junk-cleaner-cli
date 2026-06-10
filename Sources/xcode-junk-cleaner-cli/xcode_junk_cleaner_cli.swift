@@ -691,7 +691,7 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
                     stateManager.incrementAnimation()
                     let snapshot = stateManager.getSnapshot()
                     
-                    var output = ""
+                    var lines: [String] = []
                     for state in snapshot {
                         let categoryName = state.category.displayName.padding(toLength: 30, withPad: " ", startingAt: 0)
                         let bar: String
@@ -708,11 +708,15 @@ struct XcodeJunkCleaner: AsyncParsableCommand {
                             bar = animatedProgressBar(step: state.animationStep).colored(.cyan)
                             statusText = "Analyzing...".colored(.white)
                         }
-                        output += "\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)\n"
+                        lines.append("\r\u{001B}[K   Analyzing \(categoryName)... \(bar) \(statusText)")
                     }
                     
-                    // Move cursor up n lines
-                    output += "\u{001B}[\(n)A"
+                    var output = lines.joined(separator: "\n")
+                    if n > 1 {
+                        output += "\u{001B}[\(n-1)A\r"
+                    } else {
+                        output += "\r"
+                    }
                     
                     print(output, terminator: "")
                     fflush(stdout)

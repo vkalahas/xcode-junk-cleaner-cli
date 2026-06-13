@@ -1,4 +1,5 @@
-Create polished App Store screenshots via agents or API. Add this to your Fastlane CI/CD.
+Create polished App Store listing screenshots via agents or API. Add this to your Fastlane CI/CD.
+
 [https://tryaqua.app/](https://tryaqua.app/)
 
 # Xcode Junk Cleaner CLI
